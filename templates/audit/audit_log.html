@@ -1,0 +1,145 @@
+{% extends "base.html" %}
+{% block title %}Audit log – {{ server.name }}{% endblock %}
+
+{% block extra_css %}
+.page-header{display:flex;align-items:center;gap:.75rem;margin-bottom:1.25rem;flex-wrap:wrap}
+.page-header h1{font-size:20px;font-weight:600}
+.back{color:var(--text-dim);font-size:13px}
+
+.filters{display:flex;gap:.75rem;margin-bottom:1.25rem;flex-wrap:wrap;align-items:flex-end}
+.filter-group{display:flex;flex-direction:column;gap:.3rem}
+.filter-label{font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.06em}
+.filter-select,.filter-input{
+  background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);
+  padding:.35rem .6rem;color:var(--text);font-size:13px;outline:none
+}
+.filter-select:focus,.filter-input:focus{border-color:#4f8ef7}
+.btn-filter{
+  padding:.38rem .85rem;background:#4f8ef7;color:#fff;border:none;
+  border-radius:var(--radius);font-size:13px;cursor:pointer
+}
+.btn-clear{
+  padding:.38rem .75rem;background:rgba(255,255,255,.06);color:var(--text-dim);
+  border:1px solid var(--border);border-radius:var(--radius);font-size:13px;cursor:pointer;
+  text-decoration:none;display:inline-flex;align-items:center
+}
+
+.audit-table{width:100%;border-collapse:collapse}
+.audit-table th{
+  text-align:left;padding:.5rem .75rem;font-size:11px;font-weight:600;
+  letter-spacing:.07em;text-transform:uppercase;color:var(--text-dim);
+  border-bottom:1px solid var(--border)
+}
+.audit-table td{
+  padding:.55rem .75rem;font-size:13px;border-bottom:1px solid rgba(46,51,71,.5);
+  vertical-align:top
+}
+.audit-table tr:hover td{background:rgba(255,255,255,.02)}
+.ts{font-family:var(--font-mono);font-size:12px;color:var(--text-dim);white-space:nowrap}
+.etype{font-family:var(--font-mono);font-size:12px}
+.sev-badge{
+  display:inline-block;padding:.15rem .5rem;border-radius:4px;
+  font-size:11px;font-weight:600;text-transform:uppercase
+}
+.sev-info   {background:rgba(79,142,247,.15);color:#4f8ef7}
+.sev-warning{background:rgba(245,158,11,.15);color:#f59e0b}
+.sev-error  {background:rgba(239,68,68,.15); color:#ef4444}
+
+.pagination{display:flex;gap:.4rem;margin-top:1.25rem;align-items:center;flex-wrap:wrap}
+.page-btn{
+  padding:.3rem .65rem;border-radius:var(--radius);border:1px solid var(--border);
+  background:var(--bg2);color:var(--text-dim);font-size:13px;text-decoration:none
+}
+.page-btn.active{background:#4f8ef7;color:#fff;border-color:#4f8ef7}
+.page-btn:hover:not(.active){border-color:#4f8ef7;color:#4f8ef7}
+.page-info{font-size:12px;color:var(--text-dim);margin-left:.5rem}
+
+.empty{text-align:center;padding:3rem;color:var(--text-dim);font-size:14px}
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <a class="back" href="{% url 'dashboard:server_detail' server.slug %}">← {{ server.name }}</a>
+  <h1>Audit log</h1>
+</div>
+
+<!-- Filtry -->
+<form method="get" class="filters">
+  <div class="filter-group">
+    <span class="filter-label">Severity</span>
+    <select name="severity" class="filter-select">
+      <option value="" {% if not severity %}selected{% endif %}>Vše</option>
+      <option value="info"    {% if severity == "info" %}selected{% endif %}>Info</option>
+      <option value="warning" {% if severity == "warning" %}selected{% endif %}>Warning</option>
+      <option value="error"   {% if severity == "error" %}selected{% endif %}>Error</option>
+    </select>
+  </div>
+  <div class="filter-group">
+    <span class="filter-label">Typ eventu</span>
+    <select name="type" class="filter-select">
+      <option value="">Vše</option>
+      {% for et in event_types %}
+        <option value="{{ et }}" {% if etype == et %}selected{% endif %}>{{ et }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <button type="submit" class="btn-filter">Filtrovat</button>
+  <a href="{% url 'audit:log' server.slug %}" class="btn-clear">Vyčistit</a>
+  <span style="margin-left:auto;font-size:12px;color:var(--text-dim)">
+    Celkem: {{ page.paginator.count }} záznamů
+  </span>
+</form>
+
+<!-- Tabulka -->
+{% if page.object_list %}
+<div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">
+  <table class="audit-table">
+    <thead>
+      <tr>
+        <th>Čas</th>
+        <th>Severity</th>
+        <th>Typ</th>
+        <th>Uživatel</th>
+        <th>Zpráva</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for ev in page.object_list %}
+      <tr>
+        <td class="ts">{{ ev.timestamp|date:"d.m.Y H:i:s" }}</td>
+        <td><span class="sev-badge sev-{{ ev.severity }}">{{ ev.severity }}</span></td>
+        <td class="etype">{{ ev.event_type }}</td>
+        <td style="color:var(--text-dim);font-size:12px">{{ ev.user.username|default:"systém" }}</td>
+        <td>{{ ev.message }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<!-- Paginace -->
+{% if page.paginator.num_pages > 1 %}
+<div class="pagination">
+  {% if page.has_previous %}
+    <a class="page-btn" href="?page={{ page.previous_page_number }}&severity={{ severity }}&type={{ etype }}">←</a>
+  {% endif %}
+
+  {% for num in page.paginator.page_range %}
+    {% if num == page.number %}
+      <span class="page-btn active">{{ num }}</span>
+    {% elif num >= page.number|add:"-3" and num <= page.number|add:"3" %}
+      <a class="page-btn" href="?page={{ num }}&severity={{ severity }}&type={{ etype }}">{{ num }}</a>
+    {% endif %}
+  {% endfor %}
+
+  {% if page.has_next %}
+    <a class="page-btn" href="?page={{ page.next_page_number }}&severity={{ severity }}&type={{ etype }}">→</a>
+  {% endif %}
+  <span class="page-info">Strana {{ page.number }} z {{ page.paginator.num_pages }}</span>
+</div>
+{% endif %}
+
+{% else %}
+<div class="empty">Žádné záznamy pro zadané filtry.</div>
+{% endif %}
+{% endblock %}

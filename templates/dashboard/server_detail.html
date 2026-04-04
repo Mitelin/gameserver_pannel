@@ -1,0 +1,520 @@
+{% extends "base.html" %}
+{% block title %}{{ server.name }} – GamePanel{% endblock %}
+
+{% block extra_css %}
+/* ── layout ── */
+.page-header{display:flex;align-items:center;gap:.75rem;margin-bottom:1.25rem;flex-wrap:wrap}
+.page-header h1{font-size:20px;font-weight:600}
+.back{color:var(--text-dim);font-size:13px}
+
+.dashboard{display:grid;grid-template-columns:1fr 330px;gap:1rem}
+@media(max-width:920px){.dashboard{grid-template-columns:1fr}}
+
+.card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:1rem}
+.card-title{font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--text-dim);margin-bottom:.75rem}
+
+/* ── status bar ── */
+.status-bar{grid-column:1/-1;display:flex;align-items:center;gap:1.5rem;flex-wrap:wrap}
+.stat{display:flex;flex-direction:column;gap:.1rem}
+.stat-label{font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.06em}
+.stat-value{font-size:17px;font-weight:600;font-variant-numeric:tabular-nums}
+
+/* ── badge ── */
+.badge{display:inline-flex;align-items:center;gap:.3rem;padding:.25rem .7rem;border-radius:99px;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.04em}
+.badge .dot{width:7px;height:7px;border-radius:50%;background:currentColor}
+.badge-online  {background:rgba(34,197,94,.15); color:#22c55e}
+.badge-offline {background:rgba(107,115,143,.15);color:#6b738f}
+.badge-starting{background:rgba(79,142,247,.15); color:#4f8ef7}
+.badge-stopping{background:rgba(249,115,22,.15); color:#f97316}
+.badge-crashed {background:rgba(239,68,68,.15);  color:#ef4444}
+.badge-unknown {background:rgba(245,158,11,.15); color:#f59e0b}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+.badge-starting .dot,.badge-stopping .dot{animation:pulse 1.2s ease-in-out infinite}
+
+/* ── buttons ── */
+.actions{display:flex;gap:.4rem;flex-wrap:wrap;margin-left:auto}
+.btn{padding:.4rem .85rem;border-radius:var(--radius);border:none;font-size:13px;font-weight:500;cursor:pointer;transition:opacity .15s,transform .1s;display:inline-flex;align-items:center;gap:.3rem}
+.btn:hover:not(:disabled){opacity:.82}
+.btn:active:not(:disabled){transform:scale(.97)}
+.btn:disabled{opacity:.3;cursor:not-allowed}
+.btn-start  {background:#22c55e;color:#fff}
+.btn-stop   {background:#ef4444;color:#fff}
+.btn-restart{background:#f59e0b;color:#000}
+.btn-force  {background:rgba(239,68,68,.18);color:#ef4444;border:1px solid rgba(239,68,68,.4)}
+.btn-send   {background:#4f8ef7;color:#fff;padding:.4rem .7rem}
+.btn-sm     {padding:.25rem .6rem;font-size:12px;background:rgba(255,255,255,.06);color:var(--text-dim);border:1px solid var(--border)}
+
+/* ── console ── */
+.console-wrap{display:flex;flex-direction:column;gap:.5rem}
+.console-out{
+  background:#080a10;border:1px solid var(--border);border-radius:var(--radius);
+  padding:.75rem;height:380px;overflow-y:auto;
+  font-family:var(--font-mono);font-size:12px;line-height:1.65;color:#9fb3d8;
+}
+.ln{display:block;white-space:pre-wrap;word-break:break-all}
+.ln.err   {color:#f87171}
+.ln.warn  {color:#fbbf24}
+.ln.sys   {color:#4b5580;font-style:italic}
+.ln.replay{opacity:.65}
+.console-opts{display:flex;align-items:center;gap:1rem}
+.toggle-lbl{display:flex;align-items:center;gap:.35rem;font-size:12px;color:var(--text-dim);cursor:pointer;user-select:none}
+.toggle-lbl input{accent-color:#4f8ef7;width:14px;height:14px}
+.cmd-row{display:flex;gap:.5rem}
+.cmd-input{
+  flex:1;background:#080a10;border:1px solid var(--border);border-radius:var(--radius);
+  padding:.4rem .75rem;font-family:var(--font-mono);font-size:13px;color:#d0d4e8;
+  outline:none;transition:border-color .15s
+}
+.cmd-input:focus{border-color:#4f8ef7}
+.cmd-input::placeholder{color:#3a3f5c}
+
+/* ── charts ── */
+.charts-grid{display:grid;grid-template-columns:1fr 1fr;gap:.75rem;margin-top:.75rem}
+@media(max-width:600px){.charts-grid{grid-template-columns:1fr}}
+.chart-card{background:var(--bg3,#1e2133);border:1px solid var(--border);border-radius:var(--radius);padding:.75rem}
+.chart-title{font-size:11px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:var(--text-dim);margin-bottom:.5rem}
+.chart-wrap{position:relative;height:130px}
+.range-tabs{display:flex;gap:.3rem;margin-bottom:.75rem}
+.range-tab{padding:.25rem .6rem;border-radius:4px;font-size:12px;border:1px solid var(--border);background:transparent;color:var(--text-dim);cursor:pointer;transition:all .15s}
+.range-tab.active,.range-tab:hover{background:rgba(79,142,247,.15);color:#4f8ef7;border-color:#4f8ef7}
+
+/* ── sidebar ── */
+.sidebar{display:flex;flex-direction:column;gap:1rem}
+.event-list{display:flex;flex-direction:column;gap:.35rem;max-height:220px;overflow-y:auto}
+.ev{font-size:12px;display:flex;gap:.4rem;line-height:1.4}
+.ev-time{color:var(--text-dim);white-space:nowrap;flex-shrink:0;font-family:var(--font-mono)}
+.ev-type{font-weight:500;flex-shrink:0}
+.ev-msg{color:var(--text-dim)}
+.sev-error{color:#f87171}.sev-warning{color:#fbbf24}.sev-info{color:#6b738f}
+.cmd-list{display:flex;flex-direction:column;gap:.3rem;max-height:180px;overflow-y:auto}
+.cmd-item{font-family:var(--font-mono);font-size:11px;color:var(--text-dim);padding:.2rem .5rem;background:rgba(255,255,255,.03);border-radius:3px}
+.cmd-item .ct{color:#d0d4e8}
+.info-table{font-size:12px;border-collapse:collapse;width:100%}
+.info-table td{padding:.2rem 0}
+.info-table td:first-child{color:var(--text-dim);padding-right:.75rem;white-space:nowrap}
+.info-table td:last-child{font-family:var(--font-mono);word-break:break-all}
+
+/* ── ws indicator ── */
+.ws-pill{display:inline-flex;align-items:center;gap:.35rem;font-size:11px;color:var(--text-dim);margin-left:.5rem}
+.ws-dot{width:6px;height:6px;border-radius:50%;background:var(--text-dim);transition:background .3s}
+.ws-dot.on {background:#22c55e;animation:pulse 2s infinite}
+.ws-dot.err{background:#ef4444}
+
+/* ── toast ── */
+#toasts{position:fixed;bottom:1.5rem;right:1.5rem;display:flex;flex-direction:column;gap:.4rem;z-index:999}
+.toast{padding:.55rem 1rem;border-radius:var(--radius);font-size:13px;min-width:220px;animation:slide-in .2s}
+.toast.ok {background:#112219;border:1px solid rgba(34,197,94,.4);color:#4ade80}
+.toast.err{background:#1f0e0e;border:1px solid rgba(239,68,68,.4);color:#f87171}
+@keyframes slide-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <a class="back" href="/">← Servery</a>
+  <h1>{{ server.name }}</h1>
+  <a class="back" href="{% url 'dashboard:player_history' server.slug %}" style="font-size:12px;color:var(--text-dim)">👥 Hráči</a>
+  <a class="back" href="{% url 'audit:log' server.slug %}" style="margin-left:auto;font-size:12px;color:var(--text-dim)">📋 Audit log</a>
+  <span class="badge badge-{{ server.status|lower }}" id="status-badge">
+    <span class="dot"></span><span id="status-text">{{ server.get_status_display }}</span>
+  </span>
+  <span class="ws-pill">
+    <span class="ws-dot" id="ws-dot"></span>
+    <span id="ws-lbl">Připojuji…</span>
+  </span>
+</div>
+
+<div class="dashboard">
+
+  <!-- Status bar -->
+  <div class="card status-bar">
+    <div class="stat"><span class="stat-label">CPU</span>
+      <span class="stat-value" id="v-cpu">{% if process_state and process_state.cpu_percent_last %}{{ process_state.cpu_percent_last|floatformat:1 }}%{% else %}–{% endif %}</span></div>
+    <div class="stat"><span class="stat-label">RAM</span>
+      <span class="stat-value" id="v-ram">{% if process_state and process_state.rss_bytes_last %}{{ process_state.rss_bytes_last|filesizeformat }}{% else %}–{% endif %}</span></div>
+    <div class="stat"><span class="stat-label">Hráči</span>
+      <span class="stat-value" id="v-players">{% if process_state %}{{ process_state.last_player_count }}{% else %}–{% endif %}</span></div>
+    <div class="stat"><span class="stat-label">Vlákna</span>
+      <span class="stat-value" id="v-threads">{% if process_state and process_state.thread_count_last %}{{ process_state.thread_count_last }}{% else %}–{% endif %}</span></div>
+    <div class="stat"><span class="stat-label">PID</span>
+      <span class="stat-value" id="v-pid" style="font-size:14px">{% if process_state and process_state.pid %}{{ process_state.pid }}{% else %}–{% endif %}</span></div>
+    <div class="actions">
+      <button class="btn btn-start"   id="btn-start"   onclick="doAction('start')">▶ Start</button>
+      <button class="btn btn-stop"    id="btn-stop"    onclick="doAction('stop')">■ Stop</button>
+      <button class="btn btn-restart" id="btn-restart" onclick="doAction('restart')">↺ Restart</button>
+      {% if user.is_staff %}
+      <button class="btn btn-force"   id="btn-force"   onclick="doAction('force-stop')">✕ Force</button>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Hlavní sloupeček -->
+  <div style="display:flex;flex-direction:column;gap:1rem">
+
+    <!-- Konzole -->
+    <div class="card">
+      <div class="card-title">Konzole</div>
+      <div class="console-wrap">
+        <div class="console-out" id="console-out">
+          {% for line in initial_lines %}
+            <span class="ln replay">{{ line.line }}</span>
+          {% endfor %}
+        </div>
+        <div class="console-opts">
+          <label class="toggle-lbl"><input type="checkbox" id="auto-scroll" checked> Auto-scroll</label>
+          <label class="toggle-lbl"><input type="checkbox" id="pause-out"> Pauza</label>
+          <button class="btn btn-sm" onclick="document.getElementById('console-out').innerHTML=''">Vyčistit</button>
+        </div>
+        <div class="cmd-row">
+          <input class="cmd-input" id="cmd-input" type="text" placeholder="Příkaz → Enter"
+                 autocomplete="off" spellcheck="false" onkeydown="if(event.key==='Enter')sendCmd()">
+          <button class="btn btn-send" onclick="sendCmd()">Odeslat</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Grafy -->
+    <div class="card">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.5rem">
+        <div class="card-title" style="margin-bottom:0">Metriky</div>
+        <div class="range-tabs" id="range-tabs">
+          <button class="range-tab" onclick="loadCharts('1h')">1h</button>
+          <button class="range-tab" onclick="loadCharts('3h')">3h</button>
+          <button class="range-tab active" onclick="loadCharts('24h')">24h</button>
+          <button class="range-tab" onclick="loadCharts('7d')">7d</button>
+          <button class="range-tab" onclick="loadCharts('30d')">30d</button>
+        </div>
+      </div>
+      <div class="charts-grid">
+        <div class="chart-card"><div class="chart-title">CPU %</div><div class="chart-wrap"><canvas id="chart-cpu"></canvas></div></div>
+        <div class="chart-card"><div class="chart-title">RAM (MB)</div><div class="chart-wrap"><canvas id="chart-ram"></canvas></div></div>
+        <div class="chart-card"><div class="chart-title">Hráči</div><div class="chart-wrap"><canvas id="chart-players"></canvas></div></div>
+        <div class="chart-card"><div class="chart-title">Vlákna</div><div class="chart-wrap"><canvas id="chart-threads"></canvas></div></div>
+      </div>
+      <div id="charts-loading" style="text-align:center;color:var(--text-dim);font-size:13px;padding:.5rem 0;display:none">Načítám data…</div>
+      <div id="charts-empty"   style="text-align:center;color:var(--text-dim);font-size:13px;padding:.5rem 0;display:none">Žádná data pro zvolené období.</div>
+    </div>
+
+  </div><!-- /main col -->
+
+  <!-- Sidebar -->
+  <div class="sidebar">
+
+    <div class="card">
+      <div class="card-title">Eventy</div>
+      <div class="event-list" id="event-list">
+        {% for ev in recent_events %}
+        <div class="ev">
+          <span class="ev-time">{{ ev.timestamp|time:"H:i:s" }}</span>
+          <span class="ev-type sev-{{ ev.severity }}">{{ ev.event_type|truncatechars:24 }}</span>
+          <span class="ev-msg">{{ ev.message|truncatechars:50 }}</span>
+        </div>
+        {% empty %}<span style="color:var(--text-dim);font-size:12px">Žádné eventy.</span>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Historie příkazů</div>
+      <div class="cmd-list" id="cmd-list">
+        {% for cmd in recent_commands %}
+        <div class="cmd-item">
+          <span class="ct">{{ cmd.command|truncatechars:48 }}</span>
+          <span style="opacity:.45;margin-left:.4rem">{{ cmd.issued_at|time:"H:i:s" }}</span>
+        </div>
+        {% empty %}<span style="color:var(--text-dim);font-size:12px">Žádné příkazy.</span>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Konfigurace</div>
+      <table class="info-table">
+        <tr><td>Typ hry</td>    <td>{{ server.get_game_type_display }}</td></tr>
+        <tr><td>tmux session</td><td>{{ server.tmux_session_name }}</td></tr>
+        <tr><td>Log soubor</td> <td style="font-size:11px">{{ server.log_file_path }}</td></tr>
+        <tr><td>Host</td>       <td>{{ server.host_label }}</td></tr>
+        {% if server.rcon_enabled %}
+        <tr><td>RCON</td>       <td>{{ server.rcon_host }}:{{ server.rcon_port }}</td></tr>
+        {% endif %}
+      </table>
+    </div>
+
+
+    {% if rcon_enabled %}
+    <div class="card" id="rcon-card">
+      <div class="card-title">RCON</div>
+      <div class="cmd-row">
+        <input class="cmd-input" id="rcon-input" type="text" placeholder="RCON prikaz..."
+               autocomplete="off" spellcheck="false" onkeydown="if(event.key==='Enter')sendRcon()">
+        <button class="btn btn-send" onclick="sendRcon()">Odeslat</button>
+      </div>
+      <div id="rcon-output" style="margin-top:.5rem;font-family:var(--font-mono);font-size:12px;
+           color:#9fb3d8;background:#080a10;border:1px solid var(--border);border-radius:var(--radius);
+           padding:.5rem;min-height:40px;white-space:pre-wrap;word-break:break-all;display:none"></div>
+    </div>
+    {% endif %}
+
+  </div><!-- /sidebar -->
+</div><!-- /dashboard -->
+
+<div id="toasts"></div>
+
+<script>
+const CSRF   = "{{ csrf_token }}";
+const SLUG   = "{{ server.slug }}";
+const WS_URL = "{{ ws_url }}";
+const METRICS_URL = "/servers/" + SLUG + "/metrics/";
+</script>
+{% endblock %}
+
+{% block extra_js %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script>
+// ══════════════════════════════════════════════════════════
+// WebSocket
+// ══════════════════════════════════════════════════════════
+let ws = null, reconnDelay = 1000;
+
+function wsConnect(){
+  const proto = location.protocol==="https:"?"wss":"ws";
+  ws = new WebSocket(`${proto}://${location.host}${WS_URL}`);
+  ws.onopen  = ()=>{ setWs("on"); reconnDelay=1000; };
+  ws.onclose = ()=>{ setWs("off"); setTimeout(wsConnect, reconnDelay); reconnDelay=Math.min(reconnDelay*2,15000); };
+  ws.onerror = ()=>setWs("err");
+  ws.onmessage = e=>{ try{ dispatch(JSON.parse(e.data)); }catch{} };
+}
+function setWs(s){
+  const d=document.getElementById("ws-dot"), l=document.getElementById("ws-lbl");
+  d.className="ws-dot"+(s==="on"?" on":s==="err"?" err":"");
+  l.textContent=s==="on"?"Připojeno":s==="err"?"Chyba":"Odpojeno…";
+}
+function dispatch(m){
+  if(m.type==="console.line")    appendLine(m.line, m.replay);
+  if(m.type==="server.status")   setStatus(m.status);
+  if(m.type==="metrics.snapshot")updateStats(m);
+  if(m.type==="audit.event")     prependEvent(m);
+  if(m.type==="command.update")  toast(m.message, m.ok);
+  if(m.type==="error")           toast(m.message, false);
+}
+
+// ══════════════════════════════════════════════════════════
+// Console
+// ══════════════════════════════════════════════════════════
+const consoleOut=document.getElementById("console-out");
+const MAX_LINES=2000;
+
+function appendLine(line, replay=false){
+  if(document.getElementById("pause-out").checked && !replay) return;
+  const el=document.createElement("span");
+  el.className="ln"+(replay?" replay":"");
+  const low=line.toLowerCase();
+  if(low.includes("error")||low.includes("exception")) el.classList.add("err");
+  else if(low.includes("warn")) el.classList.add("warn");
+  else if(line.startsWith("---")||line.startsWith("[SYS]")) el.classList.add("sys");
+  el.textContent=line;
+  consoleOut.appendChild(el);
+  while(consoleOut.children.length>MAX_LINES) consoleOut.removeChild(consoleOut.firstChild);
+  if(document.getElementById("auto-scroll").checked) consoleOut.scrollTop=consoleOut.scrollHeight;
+}
+
+async function sendCmd(){
+  const inp=document.getElementById("cmd-input"), cmd=inp.value.trim();
+  if(!cmd) return;
+  if(ws && ws.readyState===1){
+    ws.send(JSON.stringify({type:"console.command",command:cmd}));
+  } else {
+    const r=await fetch(`/servers/${SLUG}/console/send/`,{
+      method:"POST",headers:{"X-CSRFToken":CSRF,"Content-Type":"application/json"},
+      body:JSON.stringify({command:cmd})});
+    const d=await r.json(); toast(d.message,d.ok);
+  }
+  const list=document.getElementById("cmd-list"), now=new Date().toLocaleTimeString("cs");
+  const div=document.createElement("div"); div.className="cmd-item";
+  div.innerHTML=`<span class="ct">${esc(cmd)}</span><span style="opacity:.45;margin-left:.4rem">${now}</span>`;
+  list.insertBefore(div,list.firstChild);
+  inp.value=""; inp.focus();
+}
+
+// ══════════════════════════════════════════════════════════
+// Status
+// ══════════════════════════════════════════════════════════
+const STATUS_LBL={OFFLINE:"Offline",STARTING:"Startuje",ONLINE:"Online",STOPPING:"Zastavuje se",CRASHED:"Crashed",UNKNOWN:"Neznámý"};
+function setStatus(s){
+  const b=document.getElementById("status-badge");
+  b.className=`badge badge-${s.toLowerCase()}`;
+  b.innerHTML=`<span class="dot"></span><span>${STATUS_LBL[s]||s}</span>`;
+  const offline=s==="OFFLINE"||s==="CRASHED";
+  const online =s==="ONLINE";
+  q("btn-start",   !offline);
+  q("btn-stop",    !online);
+  q("btn-restart", !online);
+  const f=document.getElementById("btn-force"); if(f) f.disabled=s==="OFFLINE";
+}
+function q(id,disabled){ const el=document.getElementById(id); if(el) el.disabled=disabled; }
+
+function updateStats(m){
+  function set(id,v){ const e=document.getElementById(id); if(e) e.textContent=v; }
+  if(m.cpu_percent!=null)  set("v-cpu",  m.cpu_percent.toFixed(1)+"%");
+  if(m.ram_bytes!=null)    set("v-ram",  fmtBytes(m.ram_bytes));
+  if(m.players!=null)      set("v-players", m.players);
+  if(m.threads!=null)      set("v-threads", m.threads);
+  if(m.pid!=null)          set("v-pid",  m.pid);
+  // Push live point to charts
+  pushLivePoint(m);
+}
+
+function fmtBytes(b){
+  if(b<1048576)   return (b/1024).toFixed(0)+" KB";
+  if(b<1073741824)return (b/1048576).toFixed(0)+" MB";
+  return (b/1073741824).toFixed(1)+" GB";
+}
+
+// ══════════════════════════════════════════════════════════
+// Events sidebar
+// ══════════════════════════════════════════════════════════
+function prependEvent(m){
+  const list=document.getElementById("event-list");
+  const now=new Date().toLocaleTimeString("cs",{hour:"2-digit",minute:"2-digit",second:"2-digit"});
+  const div=document.createElement("div"); div.className="ev";
+  div.innerHTML=`<span class="ev-time">${now}</span><span class="ev-type sev-${m.severity||"info"}">${(m.event_type||"").substring(0,24)}</span><span class="ev-msg">${(m.message||"").substring(0,50)}</span>`;
+  list.insertBefore(div,list.firstChild);
+  while(list.children.length>60) list.removeChild(list.lastChild);
+}
+
+// ══════════════════════════════════════════════════════════
+// Actions
+// ══════════════════════════════════════════════════════════
+async function doAction(action){
+  try{
+    const r=await fetch(`/servers/${SLUG}/actions/${action}/`,{
+      method:"POST",headers:{"X-CSRFToken":CSRF}});
+    const d=await r.json(); toast(d.message, d.ok);
+  } catch(e){ toast("Chyba sítě", false); }
+}
+
+// ══════════════════════════════════════════════════════════
+// Charts (Chart.js 4)
+// ══════════════════════════════════════════════════════════
+const CHART_DEFAULTS = {
+  responsive:true, maintainAspectRatio:false,
+  animation:{duration:200},
+  interaction:{mode:"index",intersect:false},
+  plugins:{legend:{display:false},tooltip:{
+    backgroundColor:"#1a1d27",borderColor:"#2e3347",borderWidth:1,
+    titleColor:"#d0d4e8",bodyColor:"#8892b0",
+    callbacks:{label: ctx => ` ${ctx.dataset.label||""}: ${ctx.parsed.y ?? "–"}`}
+  }},
+  scales:{
+    x:{ticks:{color:"#4b5580",font:{size:10},maxTicksLimit:8},grid:{color:"#1e2133"}},
+    y:{ticks:{color:"#4b5580",font:{size:10}},grid:{color:"#1e2133"},beginAtZero:true}
+  }
+};
+
+function makeChart(id, color, label, maxY=null){
+  const ctx=document.getElementById(id).getContext("2d");
+  const yExtra = maxY ? {max:maxY} : {};
+  return new Chart(ctx, {
+    type:"line",
+    data:{labels:[],datasets:[{
+      label, data:[],
+      borderColor:color, backgroundColor:color+"22",
+      borderWidth:1.5, pointRadius:0, fill:true, tension:0.3
+    },{
+      label:label+" max", data:[],
+      borderColor:color+"66", borderDash:[3,3],
+      borderWidth:1, pointRadius:0, fill:false, tension:0.3
+    }]},
+    options:{...CHART_DEFAULTS, scales:{...CHART_DEFAULTS.scales, y:{...CHART_DEFAULTS.scales.y,...yExtra}}}
+  });
+}
+
+let charts={};
+let currentRange="24h";
+
+function initCharts(){
+  charts.cpu     = makeChart("chart-cpu",     "#4f8ef7","CPU",100);
+  charts.ram     = makeChart("chart-ram",     "#22c55e","RAM MB");
+  charts.players = makeChart("chart-players", "#f59e0b","Hráči");
+  charts.threads = makeChart("chart-threads", "#a78bfa","Vlákna");
+}
+
+async function loadCharts(range){
+  currentRange = range;
+  document.querySelectorAll(".range-tab").forEach(t=>{
+    t.classList.toggle("active", t.textContent===range);
+  });
+  document.getElementById("charts-loading").style.display="block";
+  document.getElementById("charts-empty").style.display="none";
+
+  try{
+    const r=await fetch(`${METRICS_URL}?range=${range}`,{headers:{"X-CSRFToken":CSRF}});
+    const d=await r.json();
+
+    const labels = d.labels || [];
+    if(labels.length===0){
+      document.getElementById("charts-empty").style.display="block";
+      document.getElementById("charts-loading").style.display="none";
+      return;
+    }
+
+    setChartData(charts.cpu,     labels, d.datasets.cpu||[],     d.datasets.cpu_max||[]);
+    setChartData(charts.ram,     labels, d.datasets.ram_mb||[],  d.datasets.ram_mb_max||[]);
+    setChartData(charts.players, labels, d.datasets.players||[], []);
+    setChartData(charts.threads, labels, d.datasets.threads||[], []);
+
+  } catch(e){
+    toast("Chyba načítání grafů", false);
+  }
+  document.getElementById("charts-loading").style.display="none";
+}
+
+function setChartData(chart, labels, data, dataMax){
+  chart.data.labels = labels;
+  chart.data.datasets[0].data = data;
+  chart.data.datasets[1].data = dataMax;
+  chart.update("none");
+}
+
+// Live push – přidá nový bod do grafů při WS snapshotu
+function pushLivePoint(m){
+  if(currentRange!=="1h" && currentRange!=="3h") return;  // live jen pro krátké rozsahy
+  const now=new Date().toLocaleTimeString("cs",{hour:"2-digit",minute:"2-digit"});
+  const MAX=120;
+  function push(chart, val){
+    if(val==null) return;
+    chart.data.labels.push(now);
+    chart.data.datasets[0].data.push(val);
+    if(chart.data.labels.length>MAX){
+      chart.data.labels.shift();
+      chart.data.datasets[0].data.shift();
+      chart.data.datasets[1].data.shift();
+    }
+    chart.update("none");
+  }
+  push(charts.cpu,     m.cpu_percent!=null?parseFloat(m.cpu_percent.toFixed(1)):null);
+  push(charts.ram,     m.ram_bytes!=null?Math.round(m.ram_bytes/1048576):null);
+  push(charts.players, m.players);
+  push(charts.threads, m.threads);
+}
+
+// ══════════════════════════════════════════════════════════
+// Toast
+// ══════════════════════════════════════════════════════════
+function toast(msg, ok=true){
+  const c=document.getElementById("toasts");
+  const el=document.createElement("div"); el.className=`toast ${ok?"ok":"err"}`; el.textContent=msg;
+  c.appendChild(el); setTimeout(()=>el.remove(),3500);
+}
+
+function esc(s){ return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+
+// ══════════════════════════════════════════════════════════
+// Init
+// ══════════════════════════════════════════════════════════
+setStatus("{{ server.status }}");
+initCharts();
+loadCharts("24h");
+wsConnect();
+consoleOut.scrollTop = consoleOut.scrollHeight;
+</script>
+{% endblock %}

@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Gameserver Panel{% endblock %}</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #0f1117;
+      --bg2:       #1a1d27;
+      --bg3:       #222536;
+      --border:    #2e3347;
+      --text:      #d0d4e8;
+      --text-dim:  #6b738f;
+      --accent:    #4f8ef7;
+      --green:     #22c55e;
+      --red:       #ef4444;
+      --yellow:    #f59e0b;
+      --orange:    #f97316;
+      --radius:    6px;
+      --font-mono: "JetBrains Mono", "Fira Mono", monospace;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: system-ui, -apple-system, sans-serif;
+      font-size: 14px;
+      line-height: 1.5;
+      min-height: 100vh;
+    }
+
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    .navbar {
+      background: var(--bg2);
+      border-bottom: 1px solid var(--border);
+      padding: 0 1.5rem;
+      height: 48px;
+      display: flex;
+      align-items: center;
+      gap: 1.5rem;
+    }
+    .navbar .brand { font-weight: 700; font-size: 15px; color: var(--text); letter-spacing: .03em; }
+    .navbar .brand span { color: var(--accent); }
+    .navbar-links { display: flex; gap: 1rem; margin-left: auto; }
+    .navbar-links a { color: var(--text-dim); font-size: 13px; }
+    .navbar-links a:hover { color: var(--text); text-decoration: none; }
+
+    .container { max-width: 1280px; margin: 0 auto; padding: 1.5rem; }
+
+    .messages { margin-bottom: 1rem; }
+    .message  { padding: .6rem 1rem; border-radius: var(--radius); margin-bottom: .4rem; }
+    .message.success { background: rgba(34,197,94,.15); border: 1px solid rgba(34,197,94,.3); }
+    .message.error   { background: rgba(239,68,68,.15);  border: 1px solid rgba(239,68,68,.3); }
+
+    {% block extra_css %}{% endblock %}
+  </style>
+</head>
+<body>
+  <nav class="navbar">
+    <a class="brand" href="/">Game<span>Panel</span></a>
+    <div class="navbar-links">
+      {% if user.is_authenticated %}
+        <a href="/">Servery</a>
+        {% if user.is_staff %}<a href="/admin/">Admin</a>{% endif %}
+        <a href="/accounts/logout/">Odhlásit ({{ user.username }})</a>
+      {% else %}
+        <a href="/accounts/login/">Přihlásit</a>
+      {% endif %}
+    </div>
+  </nav>
+
+  <div class="container">
+    {% if messages %}
+      <div class="messages">
+        {% for msg in messages %}
+          <div class="message {{ msg.tags }}">{{ msg }}</div>
+        {% endfor %}
+      </div>
+    {% endif %}
+
+    {% block content %}{% endblock %}
+  </div>
+
+  {% block extra_js %}{% endblock %}
+</body>
+</html>

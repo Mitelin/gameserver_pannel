@@ -1,0 +1,45 @@
+# Local environment
+.env
+.env.*
+!.env.example
+
+# Python
+.venv/
+venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.py[cod]
+
+# Django
+staticfiles/
+*.sqlite3
+
+# Tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Logs and runtime files
+*.log
+*.pid
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Local context workspace
+CONTEXT/*
+!CONTEXT/.gitkeep
+context/*
+!context/.gitkeep
