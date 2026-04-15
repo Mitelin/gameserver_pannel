@@ -1,0 +1,49 @@
+{% extends "setup/base_wizard.html" %}
+{% block title %}Správcovský účet – Nastavení panelu{% endblock %}
+
+{% block wizard_content %}
+<div class="wizard-title">Vytvořit správcovský účet</div>
+<div class="wizard-subtitle">
+  Tento účet bude mít plný přístup k panelu. Použij silné heslo (min. 8 znaků).
+</div>
+
+<form method="post" novalidate>
+  {% csrf_token %}
+
+  <div class="form-group">
+    <label>{{ form.username.label }}</label>
+    {{ form.username }}
+    {% for e in form.username.errors %}<div class="error-text">{{ e }}</div>{% endfor %}
+  </div>
+
+  <div class="form-group">
+    <label>{{ form.email.label }} <span style="color:var(--text-dim);font-size:10px">(volitelné)</span></label>
+    {{ form.email }}
+    {% for e in form.email.errors %}<div class="error-text">{{ e }}</div>{% endfor %}
+  </div>
+
+  <div class="form-row">
+    <div class="form-group">
+      <label>{{ form.password.label }}</label>
+      {{ form.password }}
+      {% for e in form.password.errors %}<div class="error-text">{{ e }}</div>{% endfor %}
+    </div>
+    <div class="form-group">
+      <label>{{ form.password2.label }}</label>
+      {{ form.password2 }}
+      {% for e in form.password2.errors %}<div class="error-text">{{ e }}</div>{% endfor %}
+    </div>
+  </div>
+
+  {% if form.non_field_errors %}
+    {% for e in form.non_field_errors %}
+      <div class="error-text" style="margin-bottom:.5rem">{{ e }}</div>
+    {% endfor %}
+  {% endif %}
+
+  <div class="wizard-actions">
+    <a href="/setup/1/" class="btn btn-secondary">← Zpět</a>
+    <button type="submit" class="btn btn-primary">Pokračovat →</button>
+  </div>
+</form>
+{% endblock %}

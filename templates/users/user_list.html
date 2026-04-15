@@ -1,0 +1,152 @@
+{% extends "base.html" %}
+{% block title %}Uživatelé – Panel{% endblock %}
+
+{% block extra_css %}
+.page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1.5rem;
+}
+.page-title { font-size: 22px; font-weight: 700; }
+.btn {
+  padding: .5rem 1.1rem;
+  border-radius: var(--radius);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  border: none;
+  text-decoration: none;
+  transition: opacity .15s;
+  display: inline-flex;
+  align-items: center;
+  gap: .35rem;
+}
+.btn:hover { opacity: .82; text-decoration: none; }
+.btn-primary { background: var(--accent); color: #fff; }
+
+.users-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.users-table th {
+  padding: .65rem 1rem;
+  text-align: left;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .07em;
+  color: var(--text-dim);
+  background: var(--bg3);
+  border-bottom: 1px solid var(--border);
+}
+.users-table td {
+  padding: .75rem 1rem;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  vertical-align: middle;
+}
+.users-table tr:last-child td { border-bottom: none; }
+.users-table tr:hover td { background: rgba(255,255,255,.02); }
+
+.avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+.user-cell { display: flex; align-items: center; gap: .65rem; }
+.user-name  { font-weight: 600; }
+.user-email { font-size: 11px; color: var(--text-dim); }
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+.badge-owner    { background: rgba(245,158,11,.2);  color: var(--yellow); }
+.badge-admin    { background: rgba(79,142,247,.2);  color: var(--accent); }
+.badge-operator { background: rgba(34,197,94,.2);   color: var(--green); }
+.badge-viewer   { background: rgba(107,115,143,.2); color: var(--text-dim); }
+.badge-inactive { background: rgba(239,68,68,.1);   color: var(--red); }
+
+.action-link { color: var(--accent); font-size: 12px; }
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div class="page-title">Uživatelé a přístupy</div>
+  <a href="/users/new/" class="btn btn-primary">+ Nový uživatel</a>
+</div>
+
+{% if not rows %}
+  <div style="background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:2rem;text-align:center;color:var(--text-dim)">
+    Zatím žádní uživatelé.
+  </div>
+{% else %}
+<table class="users-table">
+  <thead>
+    <tr>
+      <th>Uživatel</th>
+      <th>Globální role</th>
+      <th>Servery</th>
+      <th>Stav</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for row in rows %}
+    <tr>
+      <td>
+        <div class="user-cell">
+          <div class="avatar">{{ row.user.username|first|upper }}</div>
+          <div>
+            <div class="user-name">{{ row.user.username }}</div>
+            {% if row.user.email %}<div class="user-email">{{ row.user.email }}</div>{% endif %}
+          </div>
+        </div>
+      </td>
+      <td>
+        <span class="badge badge-{{ row.profile.panel_role }}">
+          {{ row.profile.get_panel_role_display }}
+        </span>
+      </td>
+      <td style="color:var(--text-dim)">
+        {% if row.profile.is_admin_or_above %}
+          <span title="Admin/Owner má přístup ke všem serverům">všechny</span>
+        {% else %}
+          {{ row.server_count }}
+        {% endif %}
+      </td>
+      <td>
+        {% if row.user.is_active %}
+          <span style="color:var(--green);font-size:12px">● aktivní</span>
+        {% else %}
+          <span class="badge badge-inactive">neaktivní</span>
+        {% endif %}
+      </td>
+      <td style="text-align:right">
+        <a href="/users/{{ row.user.pk }}/" class="action-link">Upravit →</a>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}

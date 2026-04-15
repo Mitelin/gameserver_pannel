@@ -1,0 +1,35 @@
+{% extends "setup/base_wizard.html" %}
+{% block title %}Vítejte – Nastavení panelu{% endblock %}
+
+{% block wizard_content %}
+<div class="wizard-title">Vítejte v Gameserver Panelu</div>
+<div class="wizard-subtitle">
+  Než začneš spravovat servery, projdi rychlým nastavením.<br>
+  Zabere méně než 2 minuty.
+</div>
+
+<div style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:1rem 1.25rem;margin-bottom:1.25rem">
+  <div style="font-size:12px;color:var(--text-dim);margin-bottom:.6rem;text-transform:uppercase;letter-spacing:.07em;font-weight:600">Wizard provede tímto nastavením</div>
+  <ul style="list-style:none;display:flex;flex-direction:column;gap:.45rem">
+    <li style="font-size:13px;color:var(--text);display:flex;gap:.6rem;align-items:center">
+      <span style="color:var(--green);font-size:11px">●</span> Vytvoření správcovského účtu
+    </li>
+    <li style="font-size:13px;color:var(--text);display:flex;gap:.6rem;align-items:center">
+      <span style="color:var(--green);font-size:11px">●</span> Základní konfigurace panelu
+    </li>
+    <li style="font-size:13px;color:var(--text);display:flex;gap:.6rem;align-items:center">
+      <span style="color:var(--green);font-size:11px">●</span> Kontrola prostředí (databáze, Redis, tmux)
+    </li>
+    <li style="font-size:13px;color:var(--text);display:flex;gap:.6rem;align-items:center">
+      <span style="color:var(--accent);font-size:11px">●</span> Volitelné přidání prvního serveru
+    </li>
+  </ul>
+</div>
+
+<form method="post">
+  {% csrf_token %}
+  <div class="wizard-actions" style="justify-content:flex-start;margin-top:1rem">
+    <button type="submit" class="btn btn-primary">Začít →</button>
+  </div>
+</form>
+{% endblock %}

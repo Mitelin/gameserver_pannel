@@ -1,0 +1,171 @@
+{% extends "base.html" %}
+{% block title %}Přístup – {{ server.name }}{% endblock %}
+
+{% block extra_css %}
+.page-header { display: flex; align-items: center; gap: 1rem; margin-bottom: 1.5rem; }
+.back-link { color: var(--text-dim); font-size: 13px; text-decoration: none; }
+.back-link:hover { color: var(--text); }
+.page-title { font-size: 20px; font-weight: 700; }
+.server-slug { color: var(--text-dim); font-size: 13px; font-family: var(--font-mono); }
+
+.card {
+  background: var(--bg2); border: 1px solid var(--border);
+  border-radius: var(--radius); overflow: hidden; margin-bottom: 1.25rem;
+  max-width: 700px;
+}
+.card-head {
+  padding: .75rem 1.1rem; background: var(--bg3);
+  border-bottom: 1px solid var(--border);
+  font-size: 11px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .07em; color: var(--text-dim);
+}
+.card-body { padding: 1.1rem; }
+
+.member-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: .65rem 0; border-bottom: 1px solid var(--border); gap: .5rem;
+}
+.member-row:last-child { border-bottom: none; }
+
+.avatar {
+  width: 30px; height: 30px; border-radius: 50%;
+  background: var(--bg3); border: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 700; color: var(--accent); flex-shrink: 0;
+}
+.member-info { display: flex; align-items: center; gap: .6rem; }
+.member-name { font-weight: 600; font-size: 13px; }
+.member-email { font-size: 11px; color: var(--text-dim); }
+
+.badge {
+  display: inline-flex; align-items: center;
+  padding: 2px 8px; border-radius: 3px;
+  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+}
+.badge-owner    { background: rgba(245,158,11,.2);  color: var(--yellow); }
+.badge-admin    { background: rgba(79,142,247,.2);  color: var(--accent); }
+.badge-operator { background: rgba(34,197,94,.2);   color: var(--green); }
+.badge-viewer   { background: rgba(107,115,143,.2); color: var(--text-dim); }
+
+.btn {
+  padding: .35rem .8rem; border-radius: var(--radius); font-size: 12px;
+  font-weight: 600; cursor: pointer; border: none; text-decoration: none;
+  transition: opacity .15s; display: inline-block;
+}
+.btn:hover { opacity: .82; }
+.btn-primary   { background: var(--accent); color: #fff; }
+.btn-danger    { background: var(--red); color: #fff; }
+.btn-secondary { background: var(--bg3); border: 1px solid var(--border); color: var(--text); }
+
+.add-form {
+  display: flex; gap: .5rem; flex-wrap: wrap; align-items: center;
+}
+.add-form select, .add-form input {
+  background: var(--bg3); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: .45rem .7rem;
+  color: var(--text); font-size: 13px; outline: none;
+  transition: border-color .15s;
+}
+.add-form select:focus { border-color: var(--accent); }
+
+.perm-badges { display: flex; gap: .3rem; flex-wrap: wrap; }
+.perm {
+  font-size: 10px; padding: 1px 5px; border-radius: 2px;
+  background: rgba(255,255,255,.06); color: var(--text-dim);
+}
+.perm.on { background: rgba(34,197,94,.15); color: var(--green); }
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <a href="/servers/{{ server.slug }}/" class="back-link">← {{ server.name }}</a>
+  <div>
+    <div class="page-title">Přístup k serveru</div>
+    <div class="server-slug">{{ server.slug }}</div>
+  </div>
+</div>
+
+{# ── Přidat uživatele ────────────────────────────────────────────────────── #}
+{% if all_users %}
+<div class="card">
+  <div class="card-head">Přidat uživatele</div>
+  <div class="card-body">
+    <form method="post" class="add-form">
+      {% csrf_token %}
+      <input type="hidden" name="action" value="add">
+      <select name="user_id" style="flex:1;min-width:140px">
+        {% for u in all_users %}
+          <option value="{{ u.pk }}">{{ u.username }}{% if u.email %} ({{ u.email }}){% endif %}</option>
+        {% endfor %}
+      </select>
+      <select name="role">
+        {% for value, label in roles.choices %}
+          {% if value != "owner" %}
+            <option value="{{ value }}">{{ label }}</option>
+          {% endif %}
+        {% endfor %}
+      </select>
+      <button type="submit" class="btn btn-primary">Přidat</button>
+    </form>
+  </div>
+</div>
+{% endif %}
+
+{# ── Aktuální členové ────────────────────────────────────────────────────── #}
+<div class="card">
+  <div class="card-head">Členové ({{ memberships|length }})</div>
+  <div class="card-body">
+    {% if not memberships %}
+      <div style="color:var(--text-dim);font-size:13px">Žádní členové. Přidej uživatele výše.</div>
+    {% else %}
+      {% for m in memberships %}
+      <div class="member-row">
+        <div class="member-info">
+          <div class="avatar">{{ m.user.username|first|upper }}</div>
+          <div>
+            <div class="member-name">{{ m.user.username }}</div>
+            {% if m.user.email %}<div class="member-email">{{ m.user.email }}</div>{% endif %}
+          </div>
+        </div>
+
+        <div style="display:flex;align-items:center;gap:.6rem;flex-wrap:wrap">
+          {# Rychlá změna role #}
+          <form method="post" style="display:flex;gap:.3rem;align-items:center">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="change_role">
+            <input type="hidden" name="membership_id" value="{{ m.pk }}">
+            <select name="role" onchange="this.form.submit()" style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:.3rem .5rem;color:var(--text);font-size:12px;outline:none;cursor:pointer">
+              {% for value, label in roles.choices %}
+                {% if value != "owner" %}
+                  <option value="{{ value }}" {% if m.role == value %}selected{% endif %}>{{ label }}</option>
+                {% endif %}
+              {% endfor %}
+            </select>
+          </form>
+
+          {# Oprávnění badges #}
+          <div class="perm-badges">
+            <span class="perm {% if m.can_view %}on{% endif %}">view</span>
+            <span class="perm {% if m.can_control %}on{% endif %}">control</span>
+            <span class="perm {% if m.can_edit_config %}on{% endif %}">config</span>
+            <span class="perm {% if m.can_view_audit %}on{% endif %}">audit</span>
+          </div>
+
+          {# Odebrat #}
+          <form method="post">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="remove">
+            <input type="hidden" name="membership_id" value="{{ m.pk }}">
+            <button type="submit" class="btn btn-danger" onclick="return confirm('Odebrat {{ m.user.username }}?')">✕</button>
+          </form>
+        </div>
+      </div>
+      {% endfor %}
+    {% endif %}
+  </div>
+</div>
+
+<div style="font-size:12px;color:var(--text-dim);max-width:700px">
+  Poznámka: Owner a Admin mají přístup ke všem serverům automaticky bez potřeby membership.
+</div>
+{% endblock %}

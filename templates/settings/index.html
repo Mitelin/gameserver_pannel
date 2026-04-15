@@ -1,0 +1,199 @@
+{% extends "base.html" %}
+{% block title %}Nastavení – {{ obj.panel_name }}{% endblock %}
+
+{% block extra_css %}
+.settings-wrap    { max-width: 820px; }
+.settings-header  { margin-bottom: 1.5rem; }
+.settings-title   { font-size: 22px; font-weight: 700; }
+.settings-sub     { color: var(--text-dim); font-size: 13px; margin-top: .25rem; }
+
+.settings-section {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 1.25rem;
+  overflow: hidden;
+}
+.section-head {
+  padding: .9rem 1.25rem;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  color: var(--text-dim);
+  background: var(--bg3);
+}
+.section-body   { padding: 1.25rem; }
+.form-grid      { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+.form-grid.cols3 { grid-template-columns: 1fr 1fr 1fr; }
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: .3rem;
+}
+.form-group.full { grid-column: 1 / -1; }
+.form-group label {
+  font-size: 11px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: .07em;
+  font-weight: 600;
+}
+.form-group input,
+.form-group select {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: .55rem .75rem;
+  color: var(--text);
+  font-size: 14px;
+  outline: none;
+  width: 100%;
+  transition: border-color .15s;
+}
+.form-group input:focus,
+.form-group select:focus { border-color: var(--accent); }
+.help-text  { font-size: 11px; color: var(--text-dim); }
+.error-text { font-size: 12px; color: var(--red); }
+
+.settings-actions {
+  display: flex;
+  gap: .6rem;
+  justify-content: flex-end;
+  margin-top: 1.5rem;
+}
+.btn {
+  padding: .55rem 1.25rem;
+  border-radius: var(--radius);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  border: none;
+  transition: opacity .15s;
+}
+.btn:hover { opacity: .82; }
+.btn-primary { background: var(--accent); color: #fff; }
+{% endblock %}
+
+{% block content %}
+<div class="settings-wrap">
+  <div class="settings-header">
+    <div class="settings-title">Nastavení panelu</div>
+    <div class="settings-sub">Globální konfigurace – změny se projeví okamžitě bez restartu.</div>
+  </div>
+
+  <form method="post" novalidate>
+    {% csrf_token %}
+
+    {# ── Obecné ────────────────────────────────────────────── #}
+    <div class="settings-section">
+      <div class="section-head">Obecné</div>
+      <div class="section-body">
+        <div class="form-grid">
+          <div class="form-group">
+            <label>{{ form.panel_name.label }}</label>
+            {{ form.panel_name }}
+            {% for e in form.panel_name.errors %}<div class="error-text">{{ e }}</div>{% endfor %}
+          </div>
+          <div class="form-group">
+            <label>{{ form.timezone.label }}</label>
+            {{ form.timezone }}
+            {% for e in form.timezone.errors %}<div class="error-text">{{ e }}</div>{% endfor %}
+          </div>
+          <div class="form-group">
+            <label>{{ form.default_language.label }}</label>
+            {{ form.default_language }}
+          </div>
+          <div class="form-group">
+            <label>{{ form.public_base_url.label }}</label>
+            {{ form.public_base_url }}
+            <div class="help-text">{{ form.public_base_url.help_text }}</div>
+            {% for e in form.public_base_url.errors %}<div class="error-text">{{ e }}</div>{% endfor %}
+          </div>
+        </div>
+      </div>
+    </div>
+
+    {# ── Timeouty ─────────────────────────────────────────── #}
+    <div class="settings-section">
+      <div class="section-head">Výchozí timeouty serverů</div>
+      <div class="section-body">
+        <div class="form-grid">
+          <div class="form-group">
+            <label>{{ form.default_startup_timeout.label }}</label>
+            {{ form.default_startup_timeout }}
+            {% for e in form.default_startup_timeout.errors %}<div class="error-text">{{ e }}</div>{% endfor %}
+          </div>
+          <div class="form-group">
+            <label>{{ form.default_shutdown_timeout.label }}</label>
+            {{ form.default_shutdown_timeout }}
+            {% for e in form.default_shutdown_timeout.errors %}<div class="error-text">{{ e }}</div>{% endfor %}
+          </div>
+        </div>
+      </div>
+    </div>
+
+    {# ── Retence ──────────────────────────────────────────── #}
+    <div class="settings-section">
+      <div class="section-head">Retence dat</div>
+      <div class="section-body">
+        <div class="form-grid cols3">
+          <div class="form-group">
+            <label>{{ form.raw_metrics_retention_days.label }}</label>
+            {{ form.raw_metrics_retention_days }}
+            <div class="help-text">Raw metriky (~12s interval)</div>
+            {% for e in form.raw_metrics_retention_days.errors %}<div class="error-text">{{ e }}</div>{% endfor %}
+          </div>
+          <div class="form-group">
+            <label>{{ form.minute_metrics_retention_days.label }}</label>
+            {{ form.minute_metrics_retention_days }}
+            <div class="help-text">Agregace po minutách</div>
+            {% for e in form.minute_metrics_retention_days.errors %}<div class="error-text">{{ e }}</div>{% endfor %}
+          </div>
+          <div class="form-group">
+            <label>{{ form.console_retention_days.label }}</label>
+            {{ form.console_retention_days }}
+            <div class="help-text">Konzole záznamy</div>
+            {% for e in form.console_retention_days.errors %}<div class="error-text">{{ e }}</div>{% endfor %}
+          </div>
+        </div>
+      </div>
+    </div>
+
+    {# ── Runtime ──────────────────────────────────────────── #}
+    <div class="settings-section">
+      <div class="section-head">Runtime &amp; alerting</div>
+      <div class="section-body">
+        <div class="form-grid cols3">
+          <div class="form-group">
+            <label>{{ form.runtime_poll_console_ms.label }}</label>
+            {{ form.runtime_poll_console_ms }}
+            {% for e in form.runtime_poll_console_ms.errors %}<div class="error-text">{{ e }}</div>{% endfor %}
+          </div>
+          <div class="form-group">
+            <label>{{ form.runtime_poll_metrics_seconds.label }}</label>
+            {{ form.runtime_poll_metrics_seconds }}
+            {% for e in form.runtime_poll_metrics_seconds.errors %}<div class="error-text">{{ e }}</div>{% endfor %}
+          </div>
+          <div class="form-group">
+            <label>{{ form.runtime_poll_watchdog_seconds.label }}</label>
+            {{ form.runtime_poll_watchdog_seconds }}
+            {% for e in form.runtime_poll_watchdog_seconds.errors %}<div class="error-text">{{ e }}</div>{% endfor %}
+          </div>
+          <div class="form-group">
+            <label>{{ form.alert_cooldown_minutes.label }}</label>
+            {{ form.alert_cooldown_minutes }}
+            {% for e in form.alert_cooldown_minutes.errors %}<div class="error-text">{{ e }}</div>{% endfor %}
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="settings-actions">
+      <button type="submit" class="btn btn-primary">Uložit nastavení</button>
+    </div>
+  </form>
+</div>
+{% endblock %}

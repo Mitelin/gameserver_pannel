@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block title %}Nový uživatel – Panel{% endblock %}
+
+{% block extra_css %}
+.form-wrap { max-width: 480px; }
+.page-title { font-size: 20px; font-weight: 700; margin-bottom: 1.5rem; }
+.card {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.75rem;
+}
+.form-group { display: flex; flex-direction: column; gap: .3rem; margin-bottom: .9rem; }
+.form-group label { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .07em; font-weight: 600; }
+.form-group input, .form-group select {
+  background: var(--bg3); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: .55rem .75rem;
+  color: var(--text); font-size: 14px; outline: none; width: 100%;
+  transition: border-color .15s;
+}
+.form-group input:focus, .form-group select:focus { border-color: var(--accent); }
+.error-box {
+  background: rgba(239,68,68,.1); border: 1px solid rgba(239,68,68,.3);
+  border-radius: var(--radius); padding: .75rem 1rem; margin-bottom: 1rem;
+  font-size: 13px; color: var(--red);
+}
+.actions { display: flex; gap: .6rem; margin-top: 1.25rem; justify-content: flex-end; }
+.btn {
+  padding: .55rem 1.2rem; border-radius: var(--radius); font-size: 14px;
+  font-weight: 600; cursor: pointer; border: none; text-decoration: none;
+  transition: opacity .15s; display: inline-block;
+}
+.btn:hover { opacity: .82; text-decoration: none; }
+.btn-primary  { background: var(--accent); color: #fff; }
+.btn-secondary { background: var(--bg3); border: 1px solid var(--border); color: var(--text); }
+{% endblock %}
+
+{% block content %}
+<div class="form-wrap">
+  <div class="page-title">Nový uživatel</div>
+  <div class="card">
+    {% if errors %}
+      <div class="error-box">
+        {% for e in errors %}<div>{{ e }}</div>{% endfor %}
+      </div>
+    {% endif %}
+
+    <form method="post" novalidate>
+      {% csrf_token %}
+
+      <div class="form-group">
+        <label>Uživatelské jméno</label>
+        <input type="text" name="username" value="{{ post.username|default:'' }}" autofocus autocomplete="off">
+      </div>
+      <div class="form-group">
+        <label>E-mail <span style="color:var(--text-dim);font-size:10px">(volitelné)</span></label>
+        <input type="email" name="email" value="{{ post.email|default:'' }}">
+      </div>
+      <div class="form-group">
+        <label>Heslo <span style="color:var(--text-dim);font-size:10px">(min. 8 znaků)</span></label>
+        <input type="password" name="password" autocomplete="new-password">
+      </div>
+      <div class="form-group">
+        <label>Globální role</label>
+        <select name="panel_role">
+          {% for value, label in roles.choices %}
+            <option value="{{ value }}" {% if post.panel_role == value %}selected{% endif %}>
+              {{ label }}
+            </option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="actions">
+        <a href="/users/" class="btn btn-secondary">Zrušit</a>
+        <button type="submit" class="btn btn-primary">Vytvořit uživatele</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

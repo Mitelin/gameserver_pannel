@@ -1,0 +1,209 @@
+{% extends "base.html" %}
+{% block title %}{{ target.username }} – Uživatelé{% endblock %}
+
+{% block extra_css %}
+.page-header { display: flex; align-items: center; gap: 1rem; margin-bottom: 1.5rem; }
+.back-link { color: var(--text-dim); font-size: 13px; text-decoration: none; }
+.back-link:hover { color: var(--text); }
+.page-title { font-size: 20px; font-weight: 700; }
+
+.grid { display: grid; grid-template-columns: 320px 1fr; gap: 1.25rem; align-items: start; }
+
+.card {
+  background: var(--bg2); border: 1px solid var(--border);
+  border-radius: var(--radius); overflow: hidden; margin-bottom: 1.25rem;
+}
+.card-head {
+  padding: .75rem 1.1rem; background: var(--bg3);
+  border-bottom: 1px solid var(--border);
+  font-size: 11px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .07em; color: var(--text-dim);
+}
+.card-body { padding: 1.1rem; }
+
+.user-info { display: flex; align-items: center; gap: .85rem; margin-bottom: 1rem; }
+.avatar {
+  width: 48px; height: 48px; border-radius: 50%;
+  background: var(--bg3); border: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 20px; font-weight: 700; color: var(--accent); flex-shrink: 0;
+}
+.user-name  { font-weight: 700; font-size: 15px; }
+.user-email { font-size: 12px; color: var(--text-dim); margin-top: 1px; }
+
+.badge {
+  display: inline-flex; align-items: center;
+  padding: 2px 8px; border-radius: 3px;
+  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+}
+.badge-owner    { background: rgba(245,158,11,.2);  color: var(--yellow); }
+.badge-admin    { background: rgba(79,142,247,.2);  color: var(--accent); }
+.badge-operator { background: rgba(34,197,94,.2);   color: var(--green); }
+.badge-viewer   { background: rgba(107,115,143,.2); color: var(--text-dim); }
+
+.form-group { display: flex; flex-direction: column; gap: .3rem; margin-bottom: .9rem; }
+.form-group label { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .07em; font-weight: 600; }
+.form-group select, .form-group input {
+  background: var(--bg3); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: .5rem .75rem;
+  color: var(--text); font-size: 13px; outline: none; width: 100%;
+  transition: border-color .15s;
+}
+.form-group select:focus { border-color: var(--accent); }
+
+.btn {
+  padding: .45rem 1rem; border-radius: var(--radius); font-size: 13px;
+  font-weight: 600; cursor: pointer; border: none; text-decoration: none;
+  transition: opacity .15s; display: inline-block;
+}
+.btn:hover { opacity: .82; }
+.btn-primary   { background: var(--accent); color: #fff; }
+.btn-danger    { background: var(--red); color: #fff; }
+.btn-secondary { background: var(--bg3); border: 1px solid var(--border); color: var(--text); }
+.btn-sm        { padding: .3rem .7rem; font-size: 12px; }
+
+.membership-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: .6rem 0; border-bottom: 1px solid var(--border); gap: .5rem;
+}
+.membership-row:last-child { border-bottom: none; }
+.server-name { font-weight: 500; font-size: 13px; }
+.server-slug { font-size: 11px; color: var(--text-dim); }
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <a href="/users/" class="back-link">← Uživatelé</a>
+  <div class="page-title">{{ target.username }}</div>
+  {% if not target.is_active %}
+    <span class="badge" style="background:rgba(239,68,68,.15);color:var(--red)">neaktivní</span>
+  {% endif %}
+</div>
+
+<div class="grid">
+
+  {# ── Levý sloupec ─────────────────────────────────────────────────── #}
+  <div>
+
+    {# Profil + role #}
+    <div class="card">
+      <div class="card-head">Informace</div>
+      <div class="card-body">
+        <div class="user-info">
+          <div class="avatar">{{ target.username|first|upper }}</div>
+          <div>
+            <div class="user-name">{{ target.username }}</div>
+            <div class="user-email">{{ target.email|default:"bez e-mailu" }}</div>
+          </div>
+        </div>
+
+        <form method="post">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="set_role">
+          <div class="form-group">
+            <label>Globální role</label>
+            <select name="panel_role" {% if is_self %}disabled title="Nemůžeš si změnit vlastní roli"{% endif %}>
+              {% for value, label in roles.choices %}
+                <option value="{{ value }}" {% if profile.panel_role == value %}selected{% endif %}>
+                  {{ label }}
+                </option>
+              {% endfor %}
+            </select>
+          </div>
+          {% if not is_self %}
+            <button type="submit" class="btn btn-primary" style="width:100%">Uložit roli</button>
+          {% endif %}
+        </form>
+      </div>
+    </div>
+
+    {# Aktivace / deaktivace #}
+    {% if not is_self %}
+    <div class="card">
+      <div class="card-head">Stav účtu</div>
+      <div class="card-body">
+        <form method="post">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="toggle_active">
+          <div style="display:flex;align-items:center;justify-content:space-between">
+            <span style="font-size:13px;color:var(--text-dim)">
+              {% if target.is_active %}Účet je aktivní{% else %}Účet je deaktivován{% endif %}
+            </span>
+            <button type="submit" class="btn btn-sm {% if target.is_active %}btn-danger{% else %}btn-primary{% endif %}">
+              {% if target.is_active %}Deaktivovat{% else %}Aktivovat{% endif %}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+    {% endif %}
+
+  </div>
+
+  {# ── Pravý sloupec – server memberships ───────────────────────────── #}
+  <div>
+    <div class="card">
+      <div class="card-head">Přístup k serverům</div>
+      <div class="card-body">
+
+        {% if profile.is_admin_or_above %}
+          <div style="font-size:13px;color:var(--text-dim);padding:.5rem 0">
+            Uživatel s rolí <strong>{{ profile.get_panel_role_display }}</strong> má automaticky přístup ke všem serverům.
+          </div>
+        {% else %}
+
+          {# Přidat membership #}
+          {% if all_servers|length != member_server_ids|length %}
+          <form method="post" style="display:flex;gap:.5rem;margin-bottom:1rem;flex-wrap:wrap">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="add_membership">
+            <select name="server_id" style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:.45rem .7rem;color:var(--text);font-size:13px;outline:none;flex:1;min-width:120px">
+              {% for s in all_servers %}
+                {% if s.id not in member_server_ids %}
+                  <option value="{{ s.pk }}">{{ s.name }}</option>
+                {% endif %}
+              {% endfor %}
+            </select>
+            <select name="role" style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:.45rem .7rem;color:var(--text);font-size:13px;outline:none">
+              {% for value, label in roles.choices %}
+                {% if value != "owner" %}
+                  <option value="{{ value }}">{{ label }}</option>
+                {% endif %}
+              {% endfor %}
+            </select>
+            <button type="submit" class="btn btn-primary btn-sm">Přidat</button>
+          </form>
+          {% endif %}
+
+          {# Seznam membership #}
+          {% if memberships %}
+            {% for m in memberships %}
+            <div class="membership-row">
+              <div>
+                <div class="server-name">{{ m.server.name }}</div>
+                <div class="server-slug">{{ m.server.slug }} · {{ m.get_role_display }}</div>
+              </div>
+              <div style="display:flex;gap:.4rem;align-items:center">
+                <span class="badge badge-{{ m.role }}">{{ m.get_role_display }}</span>
+                <form method="post">
+                  {% csrf_token %}
+                  <input type="hidden" name="action" value="remove_membership">
+                  <input type="hidden" name="membership_id" value="{{ m.pk }}">
+                  <button type="submit" class="btn btn-sm btn-danger">✕</button>
+                </form>
+              </div>
+            </div>
+            {% endfor %}
+          {% else %}
+            <div style="color:var(--text-dim);font-size:13px;padding:.5rem 0">
+              Žádný přístup k serverům.
+            </div>
+          {% endif %}
+
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+</div>
+{% endblock %}

@@ -1,16 +1,18 @@
 """
-apps/dashboard/views.py  (fáze 4)
+apps/dashboard/views.py  (fáze 4 + fáze 2 permissions)
 
 Multi-server overview dashboard + server detail.
 """
 import logging
 from django.shortcuts import get_object_or_404, render
 from django.contrib.auth.decorators import login_required
+from django.core.exceptions import PermissionDenied
 from django.http import JsonResponse
 
 from apps.servers.models import Server
 from apps.console.models import ConsoleLine, CommandHistory
 from apps.audit.models import AuditEvent
+from apps.users.permissions import accessible_servers, can_view_server, get_profile
 
 logger = logging.getLogger(__name__)
 INITIAL_CONSOLE_LINES = 100
@@ -19,19 +21,17 @@ INITIAL_CONSOLE_LINES = 100
 @login_required
 def server_list(request):
     """Multi-server overview – hlavní dashboard."""
-    servers = (
-        Server.objects
-        .filter(is_active=True)
-        .select_related("process_state")
-        .order_by("name")
-    )
-
-    # Agregované statistiky pro overview karty
     from apps.servers.models import ServerStatus
-    total    = servers.count()
-    online   = servers.filter(status=ServerStatus.ONLINE).count()
-    crashed  = servers.filter(status=ServerStatus.CRASHED).count()
-    offline  = servers.filter(status=ServerStatus.OFFLINE).count()
+
+    base_qs = Server.objects.filter(is_active=True).select_related("process_state")
+    servers  = accessible_servers(request.user, base_qs).order_by("name")
+
+    total   = servers.count()
+    online  = servers.filter(status=ServerStatus.ONLINE).count()
+    crashed = servers.filter(status=ServerStatus.CRASHED).count()
+    offline = servers.filter(status=ServerStatus.OFFLINE).count()
+
+    profile = get_profile(request.user)
 
     ctx = {
         "servers": servers,
@@ -41,6 +41,7 @@ def server_list(request):
             "crashed": crashed,
             "offline": offline,
         },
+        "profile": profile,
     }
     return render(request, "dashboard/server_list.html", ctx)
 
@@ -48,6 +49,8 @@ def server_list(request):
 @login_required
 def server_detail(request, slug):
     server = get_object_or_404(Server, slug=slug, is_active=True)
+    if not can_view_server(request.user, server):
+        raise PermissionDenied
 
     try:
         process_state = server.process_state
@@ -81,6 +84,8 @@ def server_detail(request, slug):
 @login_required
 def server_status_api(request, slug):
     server = get_object_or_404(Server, slug=slug, is_active=True)
+    if not can_view_server(request.user, server):
+        raise PermissionDenied
     try:
         ps = server.process_state
         return JsonResponse({

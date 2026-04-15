@@ -31,6 +31,8 @@ INSTALLED_APPS = [
     "channels",
 
     # Project apps
+    "apps.setup",
+    "apps.users",
     "apps.servers",
     "apps.console",
     "apps.control",
@@ -44,6 +46,7 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
+    "apps.setup.middleware.BootstrapMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",

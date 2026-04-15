@@ -1,0 +1,80 @@
+{% extends "setup/base_wizard.html" %}
+{% block title %}Kontrola prostředí – Setup{% endblock %}
+
+{% block extra_css %}
+{{ block.super }}
+.check-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 1rem;
+  padding: .75rem 0;
+  border-bottom: 1px solid var(--border);
+}
+.check-row:last-child { border-bottom: none; }
+.check-icon {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+.check-icon.ok      { background: rgba(34,197,94,.2);  color: var(--green); }
+.check-icon.fail    { background: rgba(239,68,68,.2);  color: var(--red); }
+.check-icon.warning { background: rgba(245,158,11,.2); color: var(--yellow); }
+.check-label  { font-size: 14px; font-weight: 600; }
+.check-detail { font-size: 12px; color: var(--text-dim); margin-top: 2px; word-break: break-all; }
+.optional-badge {
+  font-size: 10px;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 1px 5px;
+  margin-left: .4rem;
+  vertical-align: middle;
+}
+{% endblock %}
+
+{% block wizard_content %}
+<div class="wizard-title">Kontrola prostředí</div>
+<div class="wizard-subtitle">
+  Toto jsou výsledky automatické kontroly. Volitelné komponenty lze doplnit i po nastavení.
+</div>
+
+<div style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:.25rem 1rem;margin-bottom:1.5rem">
+  {% for check in checks %}
+    <div class="check-row">
+      <div class="check-icon {% if check.ok %}ok{% elif check.optional %}warning{% else %}fail{% endif %}">
+        {% if check.ok %}✓{% else %}!{% endif %}
+      </div>
+      <div style="flex:1;min-width:0">
+        <div class="check-label">
+          {{ check.label }}
+          {% if check.optional %}<span class="optional-badge">volitelné</span>{% endif %}
+        </div>
+        <div class="check-detail">{{ check.detail }}</div>
+      </div>
+    </div>
+  {% endfor %}
+</div>
+
+{% if not all_critical_ok %}
+  <div style="background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);border-radius:var(--radius);padding:.75rem 1rem;margin-bottom:1rem;font-size:13px;color:var(--red)">
+    Kritická součást není dostupná. Oprav problém a pokračuj.
+  </div>
+{% endif %}
+
+<form method="post">
+  {% csrf_token %}
+  <div class="wizard-actions">
+    <a href="/setup/3/" class="btn btn-secondary">← Zpět</a>
+    <button type="submit" class="btn btn-primary" {% if not all_critical_ok %}disabled style="opacity:.4;cursor:not-allowed"{% endif %}>
+      Pokračovat →
+    </button>
+  </div>
+</form>
+{% endblock %}

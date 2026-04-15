@@ -1,0 +1,95 @@
+{% extends "setup/base_wizard.html" %}
+{% block title %}Dokončení – Setup{% endblock %}
+
+{% block extra_css %}
+{{ block.super }}
+.summary-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: .55rem 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+.summary-row:last-child { border-bottom: none; }
+.summary-key   { color: var(--text-dim); }
+.summary-value { color: var(--text); font-weight: 500; }
+{% endblock %}
+
+{% block wizard_content %}
+<div class="wizard-title">Vše připraveno</div>
+<div class="wizard-subtitle">
+  Zkontroluj shrnutí a kliknutím na tlačítko dokonči nastavení.
+</div>
+
+{% if not has_data %}
+  <div style="background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);border-radius:var(--radius);padding:.75rem 1rem;margin-bottom:1rem;font-size:13px;color:var(--red)">
+    Chybí data z předchozích kroků. Vrať se na začátek a vyplň povinné kroky.
+  </div>
+  <div class="wizard-actions" style="justify-content:flex-start">
+    <a href="/setup/1/" class="btn btn-secondary">← Začít znova</a>
+  </div>
+{% else %}
+
+  <div style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:.25rem 1rem;margin-bottom:1.25rem">
+
+    <div style="font-size:10px;text-transform:uppercase;letter-spacing:.09em;color:var(--text-dim);padding:.6rem 0 .2rem;font-weight:600">Správce</div>
+    <div class="summary-row">
+      <span class="summary-key">Uživatelské jméno</span>
+      <span class="summary-value">{{ step2.username }}</span>
+    </div>
+    {% if step2.email %}
+    <div class="summary-row">
+      <span class="summary-key">E-mail</span>
+      <span class="summary-value">{{ step2.email }}</span>
+    </div>
+    {% endif %}
+
+    <div style="font-size:10px;text-transform:uppercase;letter-spacing:.09em;color:var(--text-dim);padding:.8rem 0 .2rem;font-weight:600">Panel</div>
+    <div class="summary-row">
+      <span class="summary-key">Název panelu</span>
+      <span class="summary-value">{{ step3.panel_name }}</span>
+    </div>
+    <div class="summary-row">
+      <span class="summary-key">Časová zóna</span>
+      <span class="summary-value">{{ step3.timezone }}</span>
+    </div>
+    <div class="summary-row">
+      <span class="summary-key">Retence raw metrik</span>
+      <span class="summary-value">{{ step3.raw_metrics_retention_days }} dní</span>
+    </div>
+    <div class="summary-row">
+      <span class="summary-key">Retence konzole</span>
+      <span class="summary-value">{{ step3.console_retention_days }} dní</span>
+    </div>
+
+    {% if step5 %}
+    <div style="font-size:10px;text-transform:uppercase;letter-spacing:.09em;color:var(--text-dim);padding:.8rem 0 .2rem;font-weight:600">První server</div>
+    <div class="summary-row">
+      <span class="summary-key">Název</span>
+      <span class="summary-value">{{ step5.name }}</span>
+    </div>
+    <div class="summary-row">
+      <span class="summary-key">Typ hry</span>
+      <span class="summary-value">{{ step5.game_type }}</span>
+    </div>
+    {% else %}
+    <div style="font-size:10px;text-transform:uppercase;letter-spacing:.09em;color:var(--text-dim);padding:.8rem 0 .2rem;font-weight:600">První server</div>
+    <div class="summary-row">
+      <span class="summary-key">Server</span>
+      <span class="summary-value" style="color:var(--text-dim)">přeskočeno</span>
+    </div>
+    {% endif %}
+
+  </div>
+
+  <form method="post">
+    {% csrf_token %}
+    <div class="wizard-actions">
+      <a href="/setup/5/" class="btn btn-secondary">← Zpět</a>
+      <button type="submit" class="btn btn-success">Dokončit nastavení ✓</button>
+    </div>
+  </form>
+
+{% endif %}
+{% endblock %}

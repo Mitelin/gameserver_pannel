@@ -1,0 +1,81 @@
+{% extends "setup/base_wizard.html" %}
+{% block title %}Nastavení panelu – Setup{% endblock %}
+
+{% block wizard_content %}
+<div class="wizard-title">Nastavení panelu</div>
+<div class="wizard-subtitle">
+  Tato nastavení lze kdykoliv změnit v sekci <strong>Settings</strong>.
+</div>
+
+<form method="post" novalidate>
+  {% csrf_token %}
+
+  <div class="section-sep">Obecné</div>
+
+  <div class="form-group">
+    <label>{{ form.panel_name.label }}</label>
+    {{ form.panel_name }}
+    {% for e in form.panel_name.errors %}<div class="error-text">{{ e }}</div>{% endfor %}
+  </div>
+
+  <div class="form-group">
+    <label>{{ form.public_base_url.label }} <span style="color:var(--text-dim);font-size:10px">(volitelné)</span></label>
+    {{ form.public_base_url }}
+    <div class="help-text">{{ form.public_base_url.help_text }}</div>
+    {% for e in form.public_base_url.errors %}<div class="error-text">{{ e }}</div>{% endfor %}
+  </div>
+
+  <div class="form-row">
+    <div class="form-group">
+      <label>{{ form.timezone.label }}</label>
+      {{ form.timezone }}
+      {% for e in form.timezone.errors %}<div class="error-text">{{ e }}</div>{% endfor %}
+    </div>
+    <div class="form-group">
+      <label>{{ form.default_language.label }}</label>
+      {{ form.default_language }}
+      {% for e in form.default_language.errors %}<div class="error-text">{{ e }}</div>{% endfor %}
+    </div>
+  </div>
+
+  <div class="section-sep">Výchozí timeouty serverů</div>
+
+  <div class="form-row">
+    <div class="form-group">
+      <label>{{ form.default_startup_timeout.label }}</label>
+      {{ form.default_startup_timeout }}
+      {% for e in form.default_startup_timeout.errors %}<div class="error-text">{{ e }}</div>{% endfor %}
+    </div>
+    <div class="form-group">
+      <label>{{ form.default_shutdown_timeout.label }}</label>
+      {{ form.default_shutdown_timeout }}
+      {% for e in form.default_shutdown_timeout.errors %}<div class="error-text">{{ e }}</div>{% endfor %}
+    </div>
+  </div>
+
+  <div class="section-sep">Retence dat</div>
+
+  <div class="form-row">
+    <div class="form-group">
+      <label>{{ form.raw_metrics_retention_days.label }}</label>
+      {{ form.raw_metrics_retention_days }}
+      {% for e in form.raw_metrics_retention_days.errors %}<div class="error-text">{{ e }}</div>{% endfor %}
+    </div>
+    <div class="form-group">
+      <label>{{ form.minute_metrics_retention_days.label }}</label>
+      {{ form.minute_metrics_retention_days }}
+      {% for e in form.minute_metrics_retention_days.errors %}<div class="error-text">{{ e }}</div>{% endfor %}
+    </div>
+  </div>
+  <div class="form-group">
+    <label>{{ form.console_retention_days.label }}</label>
+    {{ form.console_retention_days }}
+    {% for e in form.console_retention_days.errors %}<div class="error-text">{{ e }}</div>{% endfor %}
+  </div>
+
+  <div class="wizard-actions">
+    <a href="/setup/2/" class="btn btn-secondary">← Zpět</a>
+    <button type="submit" class="btn btn-primary">Pokračovat →</button>
+  </div>
+</form>
+{% endblock %}
