@@ -275,11 +275,61 @@ def _step6(request):
     return render(request, "setup/step6.html", ctx)
 
 
-# ── Settings stránka (/settings/) ────────────────────────────────────────────
+# ── Runtime status stránka (/runtime/) ───────────────────────────────────────
+
+_WORKER_LOOPS = [
+    {"key": "runtime.heartbeat.console",  "name": "Console tailer",    "warn_after": 5,  "dead_after": 30},
+    {"key": "runtime.heartbeat.metrics",  "name": "Metrics collector", "warn_after": 30, "dead_after": 60},
+    {"key": "runtime.heartbeat.watchdog", "name": "Server watchdog",   "warn_after": 15, "dead_after": 45},
+]
+
 
 def _is_staff(user):
     return user.is_active and (user.is_staff or user.is_superuser)
 
+
+@login_required
+@user_passes_test(_is_staff)
+def runtime_status_view(request):
+    import datetime
+    from django.core.cache import cache
+    from django.utils.timezone import now as utcnow
+
+    loops = []
+    all_ok = True
+
+    for cfg in _WORKER_LOOPS:
+        raw = cache.get(cfg["key"])
+        if raw:
+            last_tick = datetime.datetime.fromisoformat(raw)
+            if last_tick.tzinfo is None:
+                last_tick = last_tick.replace(tzinfo=datetime.timezone.utc)
+            age = (utcnow() - last_tick).total_seconds()
+            if age <= cfg["warn_after"]:
+                state = "ok"
+            elif age <= cfg["dead_after"]:
+                state = "warn"
+                all_ok = False
+            else:
+                state = "dead"
+                all_ok = False
+        else:
+            last_tick = None
+            age       = None
+            state     = "stopped"
+            all_ok    = False
+
+        loops.append({
+            "name":      cfg["name"],
+            "last_tick": last_tick,
+            "age":       round(age, 1) if age is not None else None,
+            "state":     state,
+        })
+
+    return render(request, "runtime/status.html", {"loops": loops, "all_ok": all_ok})
+
+
+# ── Settings stránka (/settings/) ────────────────────────────────────────────
 
 @login_required
 @user_passes_test(_is_staff)

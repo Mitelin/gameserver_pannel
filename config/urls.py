@@ -4,7 +4,7 @@ config/urls.py  –  hlavní URL routing
 from django.contrib import admin
 from django.urls import path, include
 from django.contrib.auth import views as auth_views
-from apps.setup.views import settings_view
+from apps.setup.views import settings_view, runtime_status_view
 
 urlpatterns = [
     path("admin/",    admin.site.urls),
@@ -12,7 +12,8 @@ urlpatterns = [
     path("accounts/logout/", auth_views.LogoutView.as_view(), name="logout"),
 
     path("setup/",    include("apps.setup.urls")),
-    path("settings/", settings_view, name="settings"),
+    path("settings/", settings_view,       name="settings"),
+    path("runtime/",  runtime_status_view, name="runtime_status"),
     path("users/",    include("apps.users.urls")),
 
     path("",          include("apps.dashboard.urls")),

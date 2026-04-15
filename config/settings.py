@@ -95,12 +95,20 @@ else:
 # ── Cache + Redis ─────────────────────────────────────────────
 REDIS_URL = os.environ.get("REDIS_URL", "redis://127.0.0.1:6379/0")
 
-CACHES = {
-    "default": {
-        "BACKEND":  "django.core.cache.backends.redis.RedisCache",
-        "LOCATION": REDIS_URL,
+if USE_INMEMORY_CHANNEL_LAYER:
+    # Dev mode – žádný Redis, cache v paměti procesu
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        }
     }
-}
+else:
+    CACHES = {
+        "default": {
+            "BACKEND":  "django.core.cache.backends.redis.RedisCache",
+            "LOCATION": REDIS_URL,
+        }
+    }
 
 if USE_INMEMORY_CHANNEL_LAYER:
     CHANNEL_LAYERS = {
