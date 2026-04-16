@@ -156,6 +156,29 @@ class StartProfile(models.Model):
         self.server.save(update_fields=["start_command", "updated_at"])
 
 
+class ScheduledRestart(models.Model):
+    """
+    Plánovaný restart serveru dle cron výrazu.
+    Příklad: '0 4 * * *' = každý den ve 4:00.
+    """
+    server            = models.ForeignKey(Server, on_delete=models.CASCADE, related_name="scheduled_restarts")
+    label             = models.CharField(max_length=64, blank=True, help_text="Volitelný popis, např. 'Noční restart'")
+    cron_expression   = models.CharField(max_length=64, help_text="5-polní cron výraz, např. '0 4 * * *'")
+    is_active         = models.BooleanField(default=True)
+    warn_minutes      = models.IntegerField(default=5, help_text="Kolik minut předem varovat hráče (0 = bez varování)")
+    last_triggered_at = models.DateTimeField(null=True, blank=True)
+    created_at        = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["cron_expression"]
+
+    def __str__(self):
+        return f"{self.server.slug} / {self.label or self.cron_expression}"
+
+    def get_label(self):
+        return self.label or self.cron_expression
+
+
 class PlayerSession(models.Model):
     """Historické záznamy join/leave hráčů."""
     server           = models.ForeignKey(Server, on_delete=models.CASCADE, related_name="player_sessions")

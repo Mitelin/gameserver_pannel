@@ -278,9 +278,10 @@ def _step6(request):
 # ── Runtime status stránka (/runtime/) ───────────────────────────────────────
 
 _WORKER_LOOPS = [
-    {"key": "runtime.heartbeat.console",  "name": "Console tailer",    "warn_after": 5,  "dead_after": 30},
-    {"key": "runtime.heartbeat.metrics",  "name": "Metrics collector", "warn_after": 30, "dead_after": 60},
-    {"key": "runtime.heartbeat.watchdog", "name": "Server watchdog",   "warn_after": 15, "dead_after": 45},
+    {"key": "runtime.heartbeat.console",   "name": "Console tailer",      "warn_after": 5,  "dead_after": 30},
+    {"key": "runtime.heartbeat.metrics",   "name": "Metrics collector",   "warn_after": 30, "dead_after": 60},
+    {"key": "runtime.heartbeat.watchdog",  "name": "Server watchdog",     "warn_after": 15, "dead_after": 45},
+    {"key": "runtime.heartbeat.scheduler", "name": "Restart scheduler",   "warn_after": 60, "dead_after": 120},
 ]
 
 

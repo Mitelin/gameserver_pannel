@@ -38,9 +38,12 @@ from apps.control.backends.tmux import LocalTmuxProcessBackend
 logger = logging.getLogger(__name__)
 
 # ── Konstanty ──────────────────────────────────────────────────────────────────
-CONSOLE_INTERVAL  = 0.25
-METRICS_INTERVAL  = 12
-WATCHDOG_INTERVAL = 5
+CONSOLE_INTERVAL    = 0.25
+METRICS_INTERVAL    = 12
+WATCHDOG_INTERVAL   = 5
+SCHEDULER_INTERVAL  = 30   # sekund – jak často kontrolovat cron plány
+
+HEARTBEAT_SCHEDULER = "runtime.heartbeat.scheduler"
 
 CRASH_THRESHOLD   = 3
 LOG_SILENCE_WARN  = 120
@@ -594,6 +597,105 @@ def _watchdog_maybe_webhook(server, new_status):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# Scheduler (plánované restarty)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _scheduler_loop(stop_event: threading.Event):
+    """Každých 30 s zkontroluje aktivní ScheduledRestart záznamy a spustí restart."""
+    logger.info("Scheduler thread spuštěn.")
+
+    try:
+        from croniter import croniter as Croniter
+    except ImportError:
+        logger.error("croniter není nainstalován – scheduler neběží. Nainstaluj: pip install croniter")
+        return
+
+    from apps.servers.models import ScheduledRestart
+
+    while not stop_event.is_set():
+        try:
+            now = timezone.now()
+            # Budeme porovnávat s oknem ±SCHEDULER_INTERVAL sekund aby nedošlo k vynechání při drobném zpoždění
+            window = timedelta(seconds=SCHEDULER_INTERVAL)
+
+            active = ScheduledRestart.objects.filter(
+                is_active=True,
+                server__is_active=True,
+            ).select_related("server")
+
+            for sched in active:
+                try:
+                    cron = Croniter(sched.cron_expression, now - window)
+                    next_dt = cron.get_next(type(now))
+                    # Spustit pokud by příštím krok byl v minulém okně (tj. měl jsme ho spustit)
+                    if next_dt <= now:
+                        # Zkontroluj jestli jsme to v tomto okně ještě nespustili
+                        if sched.last_triggered_at and (now - sched.last_triggered_at) < window:
+                            continue  # Už spuštěno v tomto okně
+                        _scheduler_trigger(sched)
+                except Exception as exc:
+                    logger.warning("Scheduler: chyba pro plán %d (%s): %s", sched.pk, sched.cron_expression, exc)
+
+            cache.set(HEARTBEAT_SCHEDULER, timezone.now().isoformat(), HEARTBEAT_TTL)
+
+        except Exception:
+            logger.exception("Scheduler: neočekávaná chyba v hlavní smyčce")
+
+        stop_event.wait(SCHEDULER_INTERVAL)
+
+    logger.info("Scheduler thread ukončen.")
+
+
+def _scheduler_trigger(sched):
+    """Spustí restart serveru dle plánu."""
+    from apps.servers.models import ServerStatus
+
+    server = sched.server
+    logger.info("[scheduler] Spouštím plánovaný restart serveru %s (plán: %s)", server.slug, sched.cron_expression)
+
+    backend = LocalTmuxProcessBackend()
+
+    # Varování před restartem
+    if sched.warn_minutes > 0 and server.status == ServerStatus.ONLINE:
+        warn_msg = f"say [SERVER] Naplánovaný restart za {sched.warn_minutes} minutu/minut!"
+        try:
+            backend.send_command(server, warn_msg)
+            logger.info("[scheduler] Varování odesláno: %s", warn_msg)
+        except Exception as exc:
+            logger.warning("[scheduler] Varování se nepodařilo odeslat: %s", exc)
+        # Počkáme warn_minutes (jen pokud server běží a chceme varovat)
+        # Pozn: toto zablokuje thread na warn_minutes*60 sekund.
+        # Pro krátké hodnoty (1-5 min) je to OK; pro delší zvažte jiný přístup.
+        if sched.warn_minutes <= 5:
+            import time as _time
+            _time.sleep(sched.warn_minutes * 60)
+
+    # Restart
+    try:
+        if server.status in (ServerStatus.ONLINE, ServerStatus.UNKNOWN):
+            backend.stop(server)
+            import time as _time
+            _time.sleep(max(server.expected_shutdown_seconds, 10))
+        backend.start(server)
+
+        from apps.audit.models import AuditEvent
+        AuditEvent.objects.create(
+            server=server,
+            event_type="server.scheduled_restart",
+            severity="info",
+            message=f"Plánovaný restart dle plánu '{sched.get_label()}' ({sched.cron_expression})",
+        )
+        logger.info("[scheduler] Restart serveru %s dokončen.", server.slug)
+    except Exception as exc:
+        logger.error("[scheduler] Restart serveru %s selhal: %s", server.slug, exc)
+
+    # Aktualizuj last_triggered_at
+    from django.utils import timezone as tz
+    sched.last_triggered_at = tz.now()
+    sched.save(update_fields=["last_triggered_at"])
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # Management command
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -614,9 +716,10 @@ class Command(BaseCommand):
         signal.signal(signal.SIGINT,  _shutdown)
 
         threads = [
-            threading.Thread(target=_console_loop,  args=(stop_event,), name="console-tailer",      daemon=True),
-            threading.Thread(target=_metrics_loop,  args=(stop_event,), name="metrics-collector",   daemon=True),
-            threading.Thread(target=_watchdog_loop, args=(stop_event,), name="server-watchdog",     daemon=True),
+            threading.Thread(target=_console_loop,    args=(stop_event,), name="console-tailer",      daemon=True),
+            threading.Thread(target=_metrics_loop,    args=(stop_event,), name="metrics-collector",   daemon=True),
+            threading.Thread(target=_watchdog_loop,   args=(stop_event,), name="server-watchdog",     daemon=True),
+            threading.Thread(target=_scheduler_loop,  args=(stop_event,), name="restart-scheduler",   daemon=True),
         ]
 
         for t in threads:
@@ -624,7 +727,7 @@ class Command(BaseCommand):
 
         self.stdout.write(
             f"Runtime worker běží ({len(threads)} threadů: "
-            "console-tailer, metrics-collector, server-watchdog). "
+            "console-tailer, metrics-collector, server-watchdog, restart-scheduler). "
             "Stiskni Ctrl+C nebo pošli SIGTERM pro ukončení."
         )
 
@@ -641,5 +744,6 @@ class Command(BaseCommand):
         cache.delete(HEARTBEAT_CONSOLE)
         cache.delete(HEARTBEAT_METRICS)
         cache.delete(HEARTBEAT_WATCHDOG)
+        cache.delete(HEARTBEAT_SCHEDULER)
 
         self.stdout.write("Runtime worker ukončen.")

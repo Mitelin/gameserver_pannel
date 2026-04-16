@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block title %}{% if is_create %}Nový plán{% else %}Upravit plán{% endif %} – {{ server.name }}{% endblock %}
+
+{% block extra_css %}
+.page-header{display:flex;align-items:center;gap:.75rem;margin-bottom:1.25rem}
+.page-header h1{font-size:20px;font-weight:600}
+.back{color:var(--text-dim);font-size:13px}
+
+.form-wrap{max-width:560px}
+.card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:1.5rem}
+.section-title{font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;
+               color:var(--text-dim);margin-bottom:.75rem;padding-bottom:.4rem;border-bottom:1px solid var(--border)}
+.field-group{display:flex;flex-direction:column;gap:.3rem;margin-bottom:.85rem}
+label{font-size:12px;color:var(--text-dim)}
+.field-input{background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);
+             color:var(--text);padding:.45rem .7rem;font-size:13px;width:100%}
+.field-input:focus{outline:none;border-color:var(--accent)}
+.field-mono{font-family:var(--font-mono)}
+.field-error{font-size:11px;color:var(--red);margin-top:.15rem}
+.field-help{font-size:11px;color:var(--text-dim);margin-top:.15rem}
+.btn{padding:.45rem 1rem;border-radius:var(--radius);border:none;font-size:13px;font-weight:600;cursor:pointer;text-decoration:none}
+.btn-primary{background:var(--accent);color:#fff}
+.btn-primary:hover{opacity:.85}
+.btn-ghost{background:transparent;color:var(--text-dim);border:1px solid var(--border)}
+.btn-ghost:hover{background:rgba(255,255,255,.05);text-decoration:none;color:var(--text)}
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <a class="back" href="{% url 'control:schedule_list' server.slug %}">← Plány</a>
+  <h1>{% if is_create %}Nový plánovaný restart{% else %}Upravit plán{% endif %}</h1>
+</div>
+
+<div class="form-wrap">
+  <div class="card">
+    <form method="post">
+      {% csrf_token %}
+
+      <div class="section-title">Plán restartu</div>
+
+      <div class="field-group">
+        <label>{{ form.label.label }}</label>
+        {{ form.label }}
+        {% if form.label.errors %}<div class="field-error">{{ form.label.errors.0 }}</div>{% endif %}
+        <div class="field-help">Volitelný popis pro přehled (např. "Noční restart")</div>
+      </div>
+
+      <div class="field-group">
+        <label>{{ form.cron_expression.label }} *</label>
+        {{ form.cron_expression }}
+        {% if form.cron_expression.errors %}<div class="field-error">{{ form.cron_expression.errors.0 }}</div>{% endif %}
+        <div class="field-help">{{ form.cron_expression.help_text }}</div>
+      </div>
+
+      <div class="field-group">
+        <label>{{ form.warn_minutes.label }}</label>
+        {{ form.warn_minutes }}
+        {% if form.warn_minutes.errors %}<div class="field-error">{{ form.warn_minutes.errors.0 }}</div>{% endif %}
+        <div class="field-help">{{ form.warn_minutes.help_text }}</div>
+      </div>
+
+      <div class="field-group" style="flex-direction:row;align-items:center;gap:.5rem">
+        {{ form.is_active }}
+        <label style="color:var(--text)">{{ form.is_active.label }}</label>
+      </div>
+
+      {% if form.non_field_errors %}
+        <div class="field-error" style="margin-bottom:.75rem">{{ form.non_field_errors.0 }}</div>
+      {% endif %}
+
+      <div style="display:flex;gap:.5rem;margin-top:1rem">
+        <button type="submit" class="btn btn-primary">
+          {% if is_create %}Vytvořit plán{% else %}Uložit změny{% endif %}
+        </button>
+        <a class="btn btn-ghost" href="{% url 'control:schedule_list' server.slug %}">Zrušit</a>
+      </div>
+    </form>
+  </div>
+
+  <div style="margin-top:1rem;font-size:12px;color:var(--text-dim)">
+    <strong>Příklady:</strong><br>
+    <code style="font-family:var(--font-mono)">0 4 * * *</code> — každý den ve 4:00<br>
+    <code style="font-family:var(--font-mono)">0 */6 * * *</code> — každých 6 hodin<br>
+    <code style="font-family:var(--font-mono)">30 3 * * 1,3,5</code> — pondělí, středa, pátek ve 3:30<br>
+    <code style="font-family:var(--font-mono)">0 4 * * 1</code> — každé pondělí ve 4:00
+  </div>
+</div>
+{% endblock %}

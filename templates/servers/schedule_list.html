@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+{% block title %}Plánované restarty – {{ server.name }}{% endblock %}
+
+{% block extra_css %}
+.page-header{display:flex;align-items:center;gap:.75rem;margin-bottom:1.25rem;flex-wrap:wrap}
+.page-header h1{font-size:20px;font-weight:600}
+.back{color:var(--text-dim);font-size:13px}
+
+.card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:1.25rem}
+.card-title{font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--text-dim);margin-bottom:1rem}
+
+.table{width:100%;border-collapse:collapse;font-size:13px}
+.table th{text-align:left;font-size:10px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;
+          color:var(--text-dim);padding:.4rem .75rem;border-bottom:1px solid var(--border)}
+.table td{padding:.6rem .75rem;border-bottom:1px solid rgba(46,51,71,.5);vertical-align:middle}
+.table tr:last-child td{border-bottom:none}
+
+.badge-active  {background:rgba(34,197,94,.15); color:#22c55e;  padding:.15rem .5rem;border-radius:99px;font-size:11px;font-weight:600}
+.badge-inactive{background:rgba(107,115,143,.15);color:#6b738f; padding:.15rem .5rem;border-radius:99px;font-size:11px;font-weight:600}
+
+.btn{padding:.3rem .75rem;border-radius:var(--radius);border:none;font-size:12px;font-weight:500;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;gap:.3rem}
+.btn-primary{background:var(--accent);color:#fff}
+.btn-primary:hover{opacity:.85;text-decoration:none}
+.btn-sm{padding:.2rem .55rem;font-size:11px;background:rgba(255,255,255,.06);color:var(--text-dim);border:1px solid var(--border)}
+.btn-sm:hover{background:rgba(255,255,255,.1);text-decoration:none;color:var(--text)}
+.btn-danger{background:rgba(239,68,68,.15);color:#ef4444;border:1px solid rgba(239,68,68,.3)}
+.btn-danger:hover{background:rgba(239,68,68,.25);text-decoration:none}
+
+code.cron{font-family:var(--font-mono);font-size:12px;background:rgba(255,255,255,.06);
+          padding:.15rem .45rem;border-radius:3px;color:#9fb3d8}
+
+.empty{text-align:center;padding:2rem;color:var(--text-dim);font-size:13px}
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <a class="back" href="/servers/{{ server.slug }}/">← {{ server.name }}</a>
+  <h1>Plánované restarty</h1>
+  <a class="btn btn-primary" href="{% url 'control:schedule_create' server.slug %}" style="margin-left:auto">+ Přidat plán</a>
+</div>
+
+{% if messages %}
+  {% for msg in messages %}
+    <div class="message {{ msg.tags }}" style="margin-bottom:.75rem">{{ msg }}</div>
+  {% endfor %}
+{% endif %}
+
+<div class="card">
+  {% if schedules %}
+  <table class="table">
+    <thead>
+      <tr>
+        <th>Popis</th>
+        <th>Cron výraz</th>
+        <th>Varování</th>
+        <th>Příští spuštění</th>
+        <th>Poslední spuštění</th>
+        <th>Stav</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for item in schedules %}
+      <tr>
+        <td>{{ item.obj.label|default:"–" }}</td>
+        <td><code class="cron">{{ item.obj.cron_expression }}</code></td>
+        <td>{% if item.obj.warn_minutes %}{{ item.obj.warn_minutes }} min{% else %}–{% endif %}</td>
+        <td style="font-family:var(--font-mono);font-size:12px">
+          {% if item.next %}{{ item.next|date:"d.m.Y H:i" }}{% else %}<span style="color:var(--text-dim)">Neznámý</span>{% endif %}
+        </td>
+        <td style="font-family:var(--font-mono);font-size:12px;color:var(--text-dim)">
+          {% if item.obj.last_triggered_at %}{{ item.obj.last_triggered_at|date:"d.m.Y H:i" }}{% else %}–{% endif %}
+        </td>
+        <td>
+          {% if item.obj.is_active %}
+            <span class="badge-active">Aktivní</span>
+          {% else %}
+            <span class="badge-inactive">Neaktivní</span>
+          {% endif %}
+        </td>
+        <td>
+          <div style="display:flex;gap:.35rem;justify-content:flex-end">
+            <a class="btn btn-sm" href="{% url 'control:schedule_edit' server.slug item.obj.pk %}">Upravit</a>
+            <form method="post" action="{% url 'control:schedule_delete' server.slug item.obj.pk %}"
+                  onsubmit="return confirm('Smazat plán?')">
+              {% csrf_token %}
+              <button type="submit" class="btn btn-danger">Smazat</button>
+            </form>
+          </div>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty">Žádné plánované restarty.<br><br>
+    <a class="btn btn-primary" href="{% url 'control:schedule_create' server.slug %}">+ Přidat první plán</a>
+  </div>
+  {% endif %}
+</div>
+
+<div style="margin-top:1rem;font-size:12px;color:var(--text-dim)">
+  <strong>Příklady cron výrazů:</strong>
+  <code class="cron">0 4 * * *</code> každý den ve 4:00 &nbsp;·&nbsp;
+  <code class="cron">0 */6 * * *</code> každých 6 hodin &nbsp;·&nbsp;
+  <code class="cron">0 4 * * 1</code> každé pondělí ve 4:00
+</div>
+{% endblock %}

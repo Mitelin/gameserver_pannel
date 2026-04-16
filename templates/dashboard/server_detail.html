@@ -137,6 +137,7 @@
   <a class="ql" href="{% url 'control:server_edit' server.slug %}">⚙ Konfigurace</a>
   <a class="ql" href="{% url 'alerts:rule_list' server.slug %}">🔔 Alerty</a>
   <a class="ql" href="{% url 'control:server_history' server.slug %}">🕓 Historie změn</a>
+  <a class="ql" href="{% url 'control:schedule_list' server.slug %}">⏰ Restarty</a>
   {% if server.game_type == 'minecraft_java' or server.game_type == 'minecraft_bedrock' %}
   <a class="ql" href="{% url 'control:profile_list' server.slug %}">▶ Start profily</a>
   {% endif %}

@@ -23,8 +23,8 @@ from django.http import HttpResponseForbidden
 from django.views.decorators.http import require_POST
 
 from apps.users.permissions import can_edit_server_config, is_admin_or_above
-from .models import Server, StartProfile, GameType
-from .forms import ServerForm, StartProfileForm
+from .models import Server, StartProfile, GameType, ScheduledRestart
+from .forms import ServerForm, StartProfileForm, ScheduledRestartForm
 
 logger = logging.getLogger(__name__)
 
@@ -340,3 +340,95 @@ def profile_activate(request, slug, pk):
     profile.activate()
     messages.success(request, f"Profil '{profile.name}' je aktivni. Start prikaz byl aktualizovan.")
     return redirect(f"/servers/{slug}/profiles/")
+
+
+# ── Plánované restarty ────────────────────────────────────────────────────────
+
+@login_required
+def schedule_list(request, slug):
+    server = get_object_or_404(Server, slug=slug)
+    denied = _require_edit(request, server)
+    if denied:
+        return denied
+
+    from croniter import croniter
+    from datetime import datetime
+
+    schedules = list(server.scheduled_restarts.all())
+    # Přidej info o příším spuštění
+    enriched = []
+    for s in schedules:
+        try:
+            nxt = croniter(s.cron_expression, datetime.now()).get_next(datetime)
+        except Exception:
+            nxt = None
+        enriched.append({"obj": s, "next": nxt})
+
+    return render(request, "servers/schedule_list.html", {
+        "server":    server,
+        "schedules": enriched,
+    })
+
+
+@login_required
+def schedule_create(request, slug):
+    server = get_object_or_404(Server, slug=slug)
+    denied = _require_edit(request, server)
+    if denied:
+        return denied
+
+    if request.method == "POST":
+        form = ScheduledRestartForm(request.POST)
+        if form.is_valid():
+            s = form.save(commit=False)
+            s.server = server
+            s.save()
+            messages.success(request, f"Plánovaný restart '{s.get_label()}' byl vytvořen.")
+            return redirect(f"/servers/{slug}/schedule/")
+    else:
+        form = ScheduledRestartForm()
+
+    return render(request, "servers/schedule_edit.html", {
+        "form":      form,
+        "server":    server,
+        "is_create": True,
+    })
+
+
+@login_required
+def schedule_edit(request, slug, pk):
+    server   = get_object_or_404(Server, slug=slug)
+    schedule = get_object_or_404(ScheduledRestart, pk=pk, server=server)
+    denied   = _require_edit(request, server)
+    if denied:
+        return denied
+
+    if request.method == "POST":
+        form = ScheduledRestartForm(request.POST, instance=schedule)
+        if form.is_valid():
+            form.save()
+            messages.success(request, "Plán byl uložen.")
+            return redirect(f"/servers/{slug}/schedule/")
+    else:
+        form = ScheduledRestartForm(instance=schedule)
+
+    return render(request, "servers/schedule_edit.html", {
+        "form":      form,
+        "server":    server,
+        "schedule":  schedule,
+        "is_create": False,
+    })
+
+
+@login_required
+@require_POST
+def schedule_delete(request, slug, pk):
+    server   = get_object_or_404(Server, slug=slug)
+    schedule = get_object_or_404(ScheduledRestart, pk=pk, server=server)
+    denied   = _require_edit(request, server)
+    if denied:
+        return denied
+    label = schedule.get_label()
+    schedule.delete()
+    messages.success(request, f"Plán '{label}' byl smazán.")
+    return redirect(f"/servers/{slug}/schedule/")

@@ -29,4 +29,10 @@ urlpatterns = [
     path("<slug:slug>/profiles/<int:pk>/edit/",        server_views.profile_edit,     name="profile_edit"),
     path("<slug:slug>/profiles/<int:pk>/delete/",      server_views.profile_delete,   name="profile_delete"),
     path("<slug:slug>/profiles/<int:pk>/activate/",    server_views.profile_activate, name="profile_activate"),
+
+    # Plánované restarty (fáze 7)
+    path("<slug:slug>/schedule/",                      server_views.schedule_list,    name="schedule_list"),
+    path("<slug:slug>/schedule/new/",                  server_views.schedule_create,  name="schedule_create"),
+    path("<slug:slug>/schedule/<int:pk>/edit/",        server_views.schedule_edit,    name="schedule_edit"),
+    path("<slug:slug>/schedule/<int:pk>/delete/",      server_views.schedule_delete,  name="schedule_delete"),
 ]

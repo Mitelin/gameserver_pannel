@@ -4,7 +4,7 @@ apps/servers/forms.py
 Formuláře pro správu serverů a start profilů.
 """
 from django import forms
-from .models import Server, StartProfile, GameType
+from .models import Server, StartProfile, GameType, ScheduledRestart
 
 
 class ServerForm(forms.ModelForm):
@@ -69,3 +69,30 @@ class StartProfileForm(forms.ModelForm):
         if mn and mx and mn > mx:
             raise forms.ValidationError("Xms nesmí být větší než Xmx.")
         return cleaned
+
+
+class ScheduledRestartForm(forms.ModelForm):
+    """Plánovaný restart serveru."""
+
+    class Meta:
+        model  = ScheduledRestart
+        fields = ["label", "cron_expression", "is_active", "warn_minutes"]
+        widgets = {
+            "label":           forms.TextInput(attrs={"class": "field-input", "placeholder": "Noční restart"}),
+            "cron_expression": forms.TextInput(attrs={"class": "field-input field-mono", "placeholder": "0 4 * * *"}),
+            "warn_minutes":    forms.NumberInput(attrs={"class": "field-input"}),
+        }
+        help_texts = {
+            "cron_expression": "5-polní cron výraz: minuta hodina den měsíc den_týdne. Např. '0 4 * * *' = každý den ve 4:00.",
+            "warn_minutes":    "Kolik minut předem poslat varování do konzole. 0 = bez varování.",
+        }
+
+    def clean_cron_expression(self):
+        expr = self.cleaned_data.get("cron_expression", "").strip()
+        try:
+            from croniter import croniter
+            if not croniter.is_valid(expr):
+                raise forms.ValidationError("Neplatný cron výraz.")
+        except ImportError:
+            pass
+        return expr
