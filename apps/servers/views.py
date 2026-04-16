@@ -1,16 +1,17 @@
 """
-apps/servers/views.py  (fáze 4)
+apps/servers/views.py  (fáze 4 + fáze 5)
 
 Server management views:
-  - server_create  GET/POST  /servers/new/
-  - server_edit    GET/POST  /servers/<slug>/edit/
-  - server_delete  POST      /servers/<slug>/delete/
-  - properties_editor GET/POST /servers/<slug>/properties/
-  - profile_list   GET       /servers/<slug>/profiles/
-  - profile_create GET/POST  /servers/<slug>/profiles/new/
-  - profile_edit   GET/POST  /servers/<slug>/profiles/<pk>/edit/
-  - profile_delete POST      /servers/<slug>/profiles/<pk>/delete/
-  - profile_activate POST    /servers/<slug>/profiles/<pk>/activate/
+  - server_create      GET/POST  /servers/new/
+  - server_edit        GET/POST  /servers/<slug>/edit/
+  - server_delete      POST      /servers/<slug>/delete/
+  - server_history     GET       /servers/<slug>/history/
+  - properties_editor  GET/POST  /servers/<slug>/properties/
+  - profile_list       GET       /servers/<slug>/profiles/
+  - profile_create     GET/POST  /servers/<slug>/profiles/new/
+  - profile_edit       GET/POST  /servers/<slug>/profiles/<pk>/edit/
+  - profile_delete     POST      /servers/<slug>/profiles/<pk>/delete/
+  - profile_activate   POST      /servers/<slug>/profiles/<pk>/activate/
 """
 import logging
 from pathlib import Path
@@ -28,6 +29,45 @@ from .forms import ServerForm, StartProfileForm
 logger = logging.getLogger(__name__)
 
 _MINECRAFT_TYPES = {GameType.MINECRAFT_JAVA, GameType.MINECRAFT_BEDROCK}
+
+# Pole která sledujeme pro config change history
+_TRACKED_FIELDS = [
+    "name", "game_type", "is_active",
+    "working_directory", "start_command", "stop_command",
+    "tmux_session_name", "log_file_path",
+    "expected_startup_seconds", "expected_shutdown_seconds",
+    "rcon_enabled", "rcon_host", "rcon_port",
+    "webhook_url", "webhook_on_crash", "webhook_on_start", "webhook_on_stop",
+]
+
+
+def _log_config_changes(server: Server, old_values: dict, new_values: dict, user):
+    """Zaloguje změny konfigurace serveru do AuditEvent."""
+    changed = {}
+    for field in _TRACKED_FIELDS:
+        old = old_values.get(field)
+        new = new_values.get(field)
+        if old != new:
+            # Skryj hesla v logu
+            if "password" in field or "rcon_password" in field:
+                old = "***" if old else ""
+                new = "***" if new else ""
+            changed[field] = {"old": str(old), "new": str(new)}
+
+    if not changed:
+        return
+
+    from apps.audit.models import AuditEvent
+    summary = ", ".join(changed.keys())
+    AuditEvent.objects.create(
+        server=server,
+        event_type="server.config.changed",
+        severity="info",
+        user=user,
+        message=f"Konfigurace upravena: {summary}",
+        payload_json={"changed": changed},
+    )
+    logger.info("[%s] Config changed by %s: %s", server.slug, user, summary)
 
 
 def _require_edit(request, server):
@@ -73,9 +113,13 @@ def server_edit(request, slug):
         return denied
 
     if request.method == "POST":
+        # Ulož staré hodnoty pro diff
+        old_values = {f: getattr(server, f) for f in _TRACKED_FIELDS if hasattr(server, f)}
         form = ServerForm(request.POST, instance=server)
         if form.is_valid():
             form.save()
+            new_values = {f: getattr(server, f) for f in _TRACKED_FIELDS if hasattr(server, f)}
+            _log_config_changes(server, old_values, new_values, request.user)
             messages.success(request, "Konfigurace serveru byla uložena.")
             return redirect(f"/servers/{server.slug}/edit/")
     else:
@@ -84,10 +128,10 @@ def server_edit(request, slug):
     profiles = server.start_profiles.all() if server.game_type in _MINECRAFT_TYPES else None
 
     return render(request, "servers/server_edit.html", {
-        "form":       form,
-        "server":     server,
-        "is_create":  False,
-        "profiles":   profiles,
+        "form":         form,
+        "server":       server,
+        "is_create":    False,
+        "profiles":     profiles,
         "is_minecraft": server.game_type in _MINECRAFT_TYPES,
     })
 
@@ -104,6 +148,26 @@ def server_delete(request, slug):
     server.delete()
     messages.success(request, f"Server '{name}' byl smazán.")
     return redirect("/")
+
+
+# ── Config change history ─────────────────────────────────────────────────────
+
+@login_required
+def server_history(request, slug):
+    server = get_object_or_404(Server, slug=slug)
+    if not can_edit_server_config(request.user, server):
+        return HttpResponseForbidden("Nemáš přístup k historii konfigurace.")
+
+    from apps.audit.models import AuditEvent
+    events = AuditEvent.objects.filter(
+        server=server,
+        event_type="server.config.changed",
+    ).select_related("user").order_by("-timestamp")[:100]
+
+    return render(request, "servers/server_history.html", {
+        "server": server,
+        "events": events,
+    })
 
 
 # ── server.properties editor ──────────────────────────────────────────────────

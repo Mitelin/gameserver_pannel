@@ -20,6 +20,9 @@ urlpatterns = [
     path("<slug:slug>/delete/",            server_views.server_delete,     name="server_delete"),
     path("<slug:slug>/properties/",        server_views.properties_editor, name="properties"),
 
+    # Config history (fáze 5)
+    path("<slug:slug>/history/",           server_views.server_history,    name="server_history"),
+
     # Start profily (Minecraft)
     path("<slug:slug>/profiles/",                      server_views.profile_list,     name="profile_list"),
     path("<slug:slug>/profiles/new/",                  server_views.profile_create,   name="profile_create"),

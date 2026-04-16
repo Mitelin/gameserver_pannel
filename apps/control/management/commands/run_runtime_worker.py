@@ -379,11 +379,21 @@ def _watchdog_loop(stop_event: threading.Event):
     backend       = LocalTmuxProcessBackend()
     channel_layer = get_channel_layer()
 
+    no_players_tick = 0  # kontroluj no_players alerty každých ~60 s (12 ticků × 5 s)
+
     while not stop_event.is_set():
         try:
+            no_players_tick += 1
+            check_no_players = (no_players_tick >= 12)
+            if check_no_players:
+                no_players_tick = 0
+
             for server in Server.objects.filter(is_active=True).select_related("process_state"):
                 try:
                     _watchdog_check(server, backend, channel_layer)
+                    if check_no_players and server.status == ServerStatus.ONLINE:
+                        from apps.alerts.engine import check_no_players_alert
+                        check_no_players_alert(server)
                 except Exception as exc:
                     logger.exception("Watchdog chyba pro %s: %s", server.slug, exc)
 

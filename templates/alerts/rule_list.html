@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block title %}Alerty – {{ server.name }} – GamePanel{% endblock %}
+
+{% block extra_css %}
+.page-header { display:flex; align-items:center; gap:1rem; margin-bottom:1.5rem; }
+.page-header h1 { font-size:1.2rem; font-weight:700; }
+
+.card { background:var(--bg2); border:1px solid var(--border); border-radius:var(--radius); padding:1.25rem 1.5rem; }
+
+.rule-row {
+  display:flex; align-items:center; gap:.75rem;
+  padding:.75rem 0; border-bottom:1px solid var(--border);
+}
+.rule-row:last-child { border-bottom:none; }
+
+.rule-dot { width:9px; height:9px; border-radius:50%; flex-shrink:0; }
+.rule-dot.on  { background:var(--green); box-shadow:0 0 5px var(--green); }
+.rule-dot.off { background:var(--text-dim); }
+
+.rule-name { font-weight:600; font-size:13px; min-width:180px; }
+.rule-cond { font-size:12px; color:var(--text-dim); flex:1; }
+.rule-fired { font-size:11px; color:var(--text-dim); white-space:nowrap; }
+.rule-fired.ok   { color:var(--green); }
+.rule-fired.fail { color:var(--red); }
+
+.btn { padding:.3rem .7rem; border-radius:var(--radius); font-size:12px; font-weight:600; border:none; cursor:pointer; }
+.btn-primary { background:var(--accent); color:#fff; }
+.btn-ghost   { background:transparent; color:var(--text-dim); border:1px solid var(--border); }
+.btn-ghost:hover { color:var(--text); }
+.btn-danger  { background:rgba(239,68,68,.1); color:var(--red); border:1px solid rgba(239,68,68,.25); }
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>Alerty</h1>
+  <span style="color:var(--text-dim);font-size:13px">{{ server.name }}</span>
+  {% if can_edit %}
+    <a href="/servers/{{ server.slug }}/alerts/new/" class="btn btn-primary" style="margin-left:auto">+ Nový alert</a>
+  {% endif %}
+  <a href="/servers/{{ server.slug }}/edit/" class="btn btn-ghost">← Konfigurace</a>
+</div>
+
+<div class="card">
+  {% if rules_with_last_fire %}
+    {% for rule, last_fire in rules_with_last_fire %}
+    <div class="rule-row">
+      <div class="rule-dot {% if rule.is_active %}on{% else %}off{% endif %}"></div>
+      <div class="rule-name">{{ rule.name }}</div>
+      <div class="rule-cond">
+        {{ rule.get_condition_type_display }}
+        {% if rule.threshold_value %} ≥ {{ rule.threshold_value }}{% endif %}
+        {% if rule.status_values %} ({{ rule.status_values }}){% endif %}
+        {% if rule.log_pattern %} / <code style="font-size:11px">{{ rule.log_pattern }}</code>{% endif %}
+        &nbsp;· cooldown {{ rule.cooldown_minutes }}m
+      </div>
+      {% if last_fire %}
+        <div class="rule-fired {% if last_fire.sent_ok %}ok{% else %}fail{% endif %}">
+          {% if last_fire.sent_ok %}Odesláno{% else %}Selhalo{% endif %}
+          {{ last_fire.fired_at|date:"d.m H:i" }}
+        </div>
+      {% else %}
+        <div class="rule-fired">Nikdy nespuštěno</div>
+      {% endif %}
+      {% if can_edit %}
+        <a href="/servers/{{ server.slug }}/alerts/{{ rule.id }}/edit/" class="btn btn-ghost">Upravit</a>
+        <form method="post" action="/servers/{{ server.slug }}/alerts/{{ rule.id }}/delete/" style="margin:0">
+          {% csrf_token %}
+          <button type="submit" class="btn btn-danger"
+            onclick="return confirm('Smazat alert {{ rule.name }}?')">Smazat</button>
+        </form>
+      {% endif %}
+    </div>
+    {% endfor %}
+  {% else %}
+    <p style="color:var(--text-dim);font-size:13px;padding:.5rem 0">
+      Žádné alerty.
+      {% if can_edit %}<a href="/servers/{{ server.slug }}/alerts/new/">Vytvoř první.</a>{% endif %}
+    </p>
+  {% endif %}
+</div>
+{% endblock %}

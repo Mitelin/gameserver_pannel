@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}Historie konfigurace – {{ server.name }} – GamePanel{% endblock %}
+
+{% block extra_css %}
+.page-header { display:flex; align-items:center; gap:1rem; margin-bottom:1.5rem; }
+.page-header h1 { font-size:1.2rem; font-weight:700; }
+
+.card { background:var(--bg2); border:1px solid var(--border); border-radius:var(--radius); padding:1.25rem 1.5rem; }
+
+.history-row {
+  border-bottom: 1px solid var(--border);
+  padding: .85rem 0;
+}
+.history-row:last-child { border-bottom: none; }
+
+.history-meta {
+  display: flex; align-items: center; gap: 1rem;
+  font-size: 12px; color: var(--text-dim); margin-bottom: .5rem;
+}
+.history-meta .ts  { color: var(--text); font-weight: 600; }
+.history-meta .usr { color: var(--accent); }
+
+.diff-grid { display: grid; grid-template-columns: 1fr 1fr; gap: .3rem .75rem; margin-top: .4rem; }
+.diff-field { font-size: 11px; color: var(--text-dim); font-family: var(--font-mono); grid-column: span 2; margin-bottom: .1rem; }
+.diff-old { background: rgba(239,68,68,.1); border-radius: 3px; padding: .2rem .5rem; font-size: 12px; font-family: var(--font-mono); color: var(--red); word-break: break-all; }
+.diff-new { background: rgba(34,197,94,.1);  border-radius: 3px; padding: .2rem .5rem; font-size: 12px; font-family: var(--font-mono); color: var(--green); word-break: break-all; }
+
+.btn { padding:.35rem .8rem; border-radius:var(--radius); font-size:12px; font-weight:600; border:none; cursor:pointer; }
+.btn-ghost { background:transparent; color:var(--text-dim); border:1px solid var(--border); }
+.btn-ghost:hover { color:var(--text); }
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>Historie konfigurace</h1>
+  <span style="color:var(--text-dim);font-size:13px">{{ server.name }}</span>
+  <a href="/servers/{{ server.slug }}/edit/" class="btn btn-ghost" style="margin-left:auto">← Konfigurace</a>
+</div>
+
+<div class="card">
+  {% if events %}
+    {% for event in events %}
+    <div class="history-row">
+      <div class="history-meta">
+        <span class="ts">{{ event.timestamp|date:"d.m.Y H:i:s" }}</span>
+        {% if event.user %}
+          <span class="usr">{{ event.user.username }}</span>
+        {% else %}
+          <span>systém</span>
+        {% endif %}
+      </div>
+
+      {% if event.payload_json.changed %}
+        <div class="diff-grid">
+          {% for field, diff in event.payload_json.changed.items %}
+            <div class="diff-field">{{ field }}</div>
+            <div class="diff-old">{{ diff.old|default:"(prázdné)" }}</div>
+            <div class="diff-new">{{ diff.new|default:"(prázdné)" }}</div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <div style="font-size:12px;color:var(--text-dim)">{{ event.message }}</div>
+      {% endif %}
+    </div>
+    {% endfor %}
+  {% else %}
+    <p style="color:var(--text-dim);font-size:13px;padding:.5rem 0">
+      Zatím žádné záznamy o změnách konfigurace.
+    </p>
+  {% endif %}
+</div>
+{% endblock %}

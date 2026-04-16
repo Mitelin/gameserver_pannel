@@ -1,0 +1,152 @@
+{% extends "base.html" %}
+{% block title %}{% if is_create %}Nový alert{% else %}{{ rule.name }}{% endif %} – {{ server.name }} – GamePanel{% endblock %}
+
+{% block extra_css %}
+.page-header { display:flex; align-items:center; gap:1rem; margin-bottom:1.5rem; }
+.page-header h1 { font-size:1.2rem; font-weight:700; }
+
+.card { background:var(--bg2); border:1px solid var(--border); border-radius:var(--radius); padding:1.25rem 1.5rem; margin-bottom:1rem; }
+.card-title { font-size:.8rem; font-weight:700; text-transform:uppercase; letter-spacing:.08em; color:var(--text-dim); margin-bottom:1rem; }
+
+.field-grid { display:grid; grid-template-columns:1fr 1fr; gap:.75rem 1.25rem; }
+.field-group { display:flex; flex-direction:column; gap:.3rem; }
+.field-group.span2 { grid-column:span 2; }
+label { font-size:12px; color:var(--text-dim); }
+.field-input {
+  background:var(--bg3); border:1px solid var(--border); border-radius:var(--radius);
+  color:var(--text); padding:.45rem .7rem; font-size:13px; width:100%;
+}
+.field-input:focus { outline:none; border-color:var(--accent); }
+.field-mono { font-family:var(--font-mono); font-size:12px; }
+.field-hint  { font-size:11px; color:var(--text-dim); }
+.field-error { font-size:11px; color:var(--red); }
+.checkbox-row { display:flex; align-items:center; gap:.5rem; font-size:13px; }
+.checkbox-row input[type=checkbox] { accent-color:var(--accent); width:15px; height:15px; }
+
+/* Podmíněné sekce */
+.cond-section { display:none; }
+.cond-section.visible { display:contents; }
+
+.btn { padding:.45rem 1rem; border-radius:var(--radius); font-size:13px; font-weight:600; border:none; cursor:pointer; }
+.btn-primary { background:var(--accent); color:#fff; }
+.btn-primary:hover { opacity:.9; }
+.btn-ghost { background:transparent; color:var(--text-dim); border:1px solid var(--border); }
+.btn-ghost:hover { color:var(--text); }
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>{% if is_create %}Nový alert{% else %}{{ rule.name }}{% endif %}</h1>
+  <span style="color:var(--text-dim);font-size:13px">{{ server.name }}</span>
+  <a href="/servers/{{ server.slug }}/alerts/manage/" class="btn btn-ghost" style="margin-left:auto;font-size:12px">← Alerty</a>
+</div>
+
+<form method="post">
+  {% csrf_token %}
+
+  <div class="card">
+    <div class="card-title">Základní nastavení</div>
+    <div class="field-grid">
+      <div class="field-group span2">
+        <label>Název alertu</label>
+        {{ form.name }}
+        {% if form.name.errors %}<div class="field-error">{{ form.name.errors.0 }}</div>{% endif %}
+      </div>
+      <div class="field-group">
+        <label>Typ podmínky</label>
+        {{ form.condition_type }}
+        {% if form.condition_type.errors %}<div class="field-error">{{ form.condition_type.errors.0 }}</div>{% endif %}
+      </div>
+      <div class="field-group" style="padding-top:1.2rem">
+        <label class="checkbox-row">{{ form.is_active }} Aktivní</label>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Podmínka</div>
+    <div class="field-grid">
+      {# status_change #}
+      <div class="field-group span2" id="sec-status">
+        <label>Statusy (čárkou oddělené)</label>
+        {{ form.status_values }}
+        <div class="field-hint">{{ form.status_values.help_text }}</div>
+        {% if form.status_values.errors %}<div class="field-error">{{ form.status_values.errors.0 }}</div>{% endif %}
+      </div>
+      {# threshold #}
+      <div class="field-group span2" id="sec-threshold">
+        <label>Limit</label>
+        {{ form.threshold_value }}
+        <div class="field-hint">{{ form.threshold_value.help_text }}</div>
+        {% if form.threshold_value.errors %}<div class="field-error">{{ form.threshold_value.errors.0 }}</div>{% endif %}
+      </div>
+      {# no_players #}
+      <div class="field-group span2" id="sec-noplayers">
+        <label>Počet minut bez hráče</label>
+        {{ form.duration_minutes }}
+        {% if form.duration_minutes.errors %}<div class="field-error">{{ form.duration_minutes.errors.0 }}</div>{% endif %}
+      </div>
+      {# log_pattern #}
+      <div class="field-group span2" id="sec-logpattern">
+        <label>Regex pattern</label>
+        {{ form.log_pattern }}
+        <div class="field-hint">{{ form.log_pattern.help_text }}</div>
+        {% if form.log_pattern.errors %}<div class="field-error">{{ form.log_pattern.errors.0 }}</div>{% endif %}
+      </div>
+    </div>
+    {% if form.non_field_errors %}
+      <div class="field-error" style="margin-top:.5rem">{{ form.non_field_errors.0 }}</div>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <div class="card-title">Kanál a zpráva</div>
+    <div class="field-grid">
+      <div class="field-group span2">
+        <label>Webhook URL (Discord/Slack/Teams)</label>
+        {{ form.webhook_url }}
+        {% if form.webhook_url.errors %}<div class="field-error">{{ form.webhook_url.errors.0 }}</div>{% endif %}
+      </div>
+      <div class="field-group span2">
+        <label>Šablona zprávy</label>
+        {{ form.message_template }}
+        <div class="field-hint">{{ form.message_template.help_text }}</div>
+      </div>
+      <div class="field-group">
+        <label>Cooldown (minuty)</label>
+        {{ form.cooldown_minutes }}
+        <div class="field-hint">{{ form.cooldown_minutes.help_text }}</div>
+      </div>
+    </div>
+  </div>
+
+  <div style="display:flex;gap:.75rem">
+    <button type="submit" class="btn btn-primary">{% if is_create %}Vytvořit alert{% else %}Uložit alert{% endif %}</button>
+    <a href="/servers/{{ server.slug }}/alerts/manage/" class="btn btn-ghost">Zrušit</a>
+  </div>
+</form>
+
+<script>
+(function() {
+  const sel = document.querySelector('[name=condition_type]');
+  const sections = {
+    'status_change':  ['sec-status'],
+    'cpu_threshold':  ['sec-threshold'],
+    'ram_threshold':  ['sec-threshold'],
+    'no_players':     ['sec-noplayers'],
+    'log_pattern':    ['sec-logpattern'],
+  };
+  const all = ['sec-status','sec-threshold','sec-noplayers','sec-logpattern'];
+
+  function update() {
+    const show = sections[sel.value] || [];
+    all.forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.style.display = show.includes(id) ? '' : 'none';
+    });
+  }
+  sel.addEventListener('change', update);
+  update();
+})();
+</script>
+{% endblock %}

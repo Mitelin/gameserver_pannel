@@ -1,20 +1,23 @@
 """
 apps/alerts/views.py
 
-RCON endpoint a přehled alert rules.
+RCON endpoint, přehled a správa alert rules.
 """
 import json
 import logging
 
-from django.http import JsonResponse
+from django.http import JsonResponse, HttpResponseForbidden
 from django.views import View
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.views.decorators.http import require_POST
 from django.utils.decorators import method_decorator
-from django.shortcuts import get_object_or_404
+from django.shortcuts import get_object_or_404, render, redirect
+from django.contrib.auth.decorators import login_required
+from django.contrib import messages
 
 from apps.servers.models import Server
 from apps.alerts.models import AlertRule
+from apps.users.permissions import can_edit_server_config, can_view_server
 
 logger = logging.getLogger(__name__)
 
@@ -80,3 +83,86 @@ class AlertRuleListView(LoginRequiredMixin, View):
             })
 
         return JsonResponse({"rules": data})
+
+
+# ── Alert rules UI ────────────────────────────────────────────────────────────
+
+@login_required
+def alert_rule_list(request, slug):
+    server = get_object_or_404(Server, slug=slug, is_active=True)
+    if not can_view_server(request.user, server):
+        return HttpResponseForbidden()
+
+    rules = AlertRule.objects.filter(server=server).prefetch_related("fires")
+    rules_with_last_fire = [
+        (rule, rule.fires.first())
+        for rule in rules
+    ]
+    return render(request, "alerts/rule_list.html", {
+        "server":             server,
+        "rules_with_last_fire": rules_with_last_fire,
+        "can_edit":           can_edit_server_config(request.user, server),
+    })
+
+
+@login_required
+def alert_rule_create(request, slug):
+    server = get_object_or_404(Server, slug=slug, is_active=True)
+    if not can_edit_server_config(request.user, server):
+        return HttpResponseForbidden("Nemáš oprávnění upravovat alerty tohoto serveru.")
+
+    from .forms import AlertRuleForm
+    if request.method == "POST":
+        form = AlertRuleForm(request.POST)
+        if form.is_valid():
+            rule = form.save(commit=False)
+            rule.server = server
+            rule.save()
+            messages.success(request, f"Alert '{rule.name}' byl vytvořen.")
+            return redirect(f"/servers/{slug}/alerts/")
+    else:
+        form = AlertRuleForm()
+
+    return render(request, "alerts/rule_edit.html", {
+        "form":      form,
+        "server":    server,
+        "rule":      None,
+        "is_create": True,
+    })
+
+
+@login_required
+def alert_rule_edit(request, slug, pk):
+    server = get_object_or_404(Server, slug=slug, is_active=True)
+    rule   = get_object_or_404(AlertRule, pk=pk, server=server)
+    if not can_edit_server_config(request.user, server):
+        return HttpResponseForbidden()
+
+    from .forms import AlertRuleForm
+    if request.method == "POST":
+        form = AlertRuleForm(request.POST, instance=rule)
+        if form.is_valid():
+            form.save()
+            messages.success(request, "Alert byl uložen.")
+            return redirect(f"/servers/{slug}/alerts/")
+    else:
+        form = AlertRuleForm(instance=rule)
+
+    return render(request, "alerts/rule_edit.html", {
+        "form":      form,
+        "server":    server,
+        "rule":      rule,
+        "is_create": False,
+    })
+
+
+@login_required
+@require_POST
+def alert_rule_delete(request, slug, pk):
+    server = get_object_or_404(Server, slug=slug, is_active=True)
+    rule   = get_object_or_404(AlertRule, pk=pk, server=server)
+    if not can_edit_server_config(request.user, server):
+        return HttpResponseForbidden()
+    rule.delete()
+    messages.success(request, "Alert byl smazán.")
+    return redirect(f"/servers/{slug}/alerts/")
