@@ -5,6 +5,18 @@
 .page-header{margin-bottom:1.5rem}
 .page-header h1{font-size:22px;font-weight:600}
 
+/* System stats bar */
+.sys-stats{
+  display:flex;gap:1.5rem;flex-wrap:wrap;align-items:center;
+  background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);
+  padding:.6rem 1rem;margin-bottom:1rem;font-size:12px;color:var(--text-dim)
+}
+.sys-stat{display:flex;align-items:center;gap:.5rem}
+.sys-stat .lbl{text-transform:uppercase;letter-spacing:.06em;font-size:10px;white-space:nowrap}
+.sys-stat .val{font-weight:600;font-variant-numeric:tabular-nums;color:var(--text)}
+.sys-bar{height:5px;border-radius:3px;background:var(--bg3);width:80px;overflow:hidden;flex-shrink:0}
+.sys-bar-fill{height:100%;border-radius:3px;transition:width .5s}
+
 /* Overview stats */
 .overview-stats{
   display:grid;grid-template-columns:repeat(4,1fr);gap:1rem;margin-bottom:1.5rem
@@ -68,6 +80,28 @@
 <div class="page-header">
   <h1>Dashboard</h1>
 </div>
+
+<!-- System stats bar -->
+{% if user.is_staff %}
+<div class="sys-stats" id="sys-stats">
+  <div class="sys-stat">
+    <span class="lbl">CPU</span>
+    <div class="sys-bar"><div class="sys-bar-fill" id="ss-cpu-bar" style="width:0%;background:#4f8ef7"></div></div>
+    <span class="val" id="ss-cpu">–</span>
+  </div>
+  <div class="sys-stat">
+    <span class="lbl">RAM</span>
+    <div class="sys-bar"><div class="sys-bar-fill" id="ss-ram-bar" style="width:0%;background:#22c55e"></div></div>
+    <span class="val" id="ss-ram">–</span>
+  </div>
+  <div class="sys-stat">
+    <span class="lbl">Disk</span>
+    <div class="sys-bar"><div class="sys-bar-fill" id="ss-disk-bar" style="width:0%;background:#f59e0b"></div></div>
+    <span class="val" id="ss-disk">–</span>
+  </div>
+  <span style="margin-left:auto;font-size:10px;color:var(--text-dim)" id="ss-updated"></span>
+</div>
+{% endif %}
 
 <!-- Overview stats -->
 <div class="overview-stats">
@@ -152,5 +186,51 @@
     <br><br><a href="/servers/new/" style="background:var(--accent);color:#fff;padding:.45rem 1.1rem;border-radius:var(--radius);font-size:13px;font-weight:600;text-decoration:none">+ Přidat server</a>
   {% endif %}
 </div>
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+{% if user.is_staff %}
+<script>
+function fmtBytes(b){
+  if(b==null) return "–";
+  if(b<1073741824) return (b/1048576).toFixed(0)+" MB";
+  return (b/1073741824).toFixed(1)+" GB";
+}
+function barColor(pct){
+  if(pct>=90) return "#ef4444";
+  if(pct>=70) return "#f59e0b";
+  return null;
+}
+function setBar(fillId, valId, pct, text, defaultColor){
+  const fill = document.getElementById(fillId);
+  const val  = document.getElementById(valId);
+  if(!fill || !val) return;
+  fill.style.width = pct + "%";
+  const c = barColor(pct);
+  fill.style.background = c || defaultColor;
+  val.textContent = text;
+}
+
+async function loadSysStats(){
+  try{
+    const r = await fetch("/system-stats/");
+    if(!r.ok) return;
+    const d = await r.json();
+    setBar("ss-cpu-bar",  "ss-cpu",  d.cpu_percent,  d.cpu_percent.toFixed(1)+"%", "#4f8ef7");
+    setBar("ss-ram-bar",  "ss-ram",  d.ram_percent,
+      fmtBytes(d.ram_used_bytes)+" / "+fmtBytes(d.ram_total_bytes), "#22c55e");
+    if(d.disk_percent != null){
+      setBar("ss-disk-bar", "ss-disk", d.disk_percent,
+        fmtBytes(d.disk_used_bytes)+" / "+fmtBytes(d.disk_total_bytes), "#f59e0b");
+    }
+    const upd = document.getElementById("ss-updated");
+    if(upd) upd.textContent = "aktualizováno " + new Date().toLocaleTimeString("cs");
+  } catch(e){}
+}
+
+loadSysStats();
+setInterval(loadSysStats, 15000);
+</script>
 {% endif %}
 {% endblock %}

@@ -94,6 +94,14 @@
 .info-table td:first-child{color:var(--text-dim);padding-right:.75rem;white-space:nowrap}
 .info-table td:last-child{font-family:var(--font-mono);word-break:break-all}
 
+/* ── quick links ── */
+.ql{
+  padding:.25rem .65rem;border-radius:var(--radius);font-size:12px;font-weight:500;
+  background:rgba(255,255,255,.05);border:1px solid var(--border);
+  color:var(--text-dim);text-decoration:none;white-space:nowrap;transition:all .15s
+}
+.ql:hover{background:rgba(79,142,247,.12);border-color:#4f8ef7;color:#4f8ef7;text-decoration:none}
+
 /* ── ws indicator ── */
 .ws-pill{display:inline-flex;align-items:center;gap:.35rem;font-size:11px;color:var(--text-dim);margin-left:.5rem}
 .ws-dot{width:6px;height:6px;border-radius:50%;background:var(--text-dim);transition:background .3s}
@@ -112,8 +120,6 @@
 <div class="page-header">
   <a class="back" href="/">← Servery</a>
   <h1>{{ server.name }}</h1>
-  <a class="back" href="{% url 'dashboard:player_history' server.slug %}" style="font-size:12px;color:var(--text-dim)">👥 Hráči</a>
-  <a class="back" href="{% url 'audit:log' server.slug %}" style="margin-left:auto;font-size:12px;color:var(--text-dim)">📋 Audit log</a>
   <span class="badge badge-{{ server.status|lower }}" id="status-badge">
     <span class="dot"></span><span id="status-text">{{ server.get_status_display }}</span>
   </span>
@@ -121,6 +127,23 @@
     <span class="ws-dot" id="ws-dot"></span>
     <span id="ws-lbl">Připojuji…</span>
   </span>
+</div>
+
+<!-- Rychlé linky -->
+<div class="quick-links" style="display:flex;flex-wrap:wrap;gap:.4rem;margin-bottom:1rem;align-items:center">
+  <a class="ql" href="{% url 'dashboard:player_history' server.slug %}">👥 Hráči</a>
+  <a class="ql" href="{% url 'audit:log' server.slug %}">📋 Audit log</a>
+  {% if user.is_staff %}
+  <a class="ql" href="{% url 'control:server_edit' server.slug %}">⚙ Konfigurace</a>
+  <a class="ql" href="{% url 'alerts:rule_list' server.slug %}">🔔 Alerty</a>
+  <a class="ql" href="{% url 'control:server_history' server.slug %}">🕓 Historie změn</a>
+  {% if server.game_type == 'minecraft_java' or server.game_type == 'minecraft_bedrock' %}
+  <a class="ql" href="{% url 'control:profile_list' server.slug %}">▶ Start profily</a>
+  {% endif %}
+  {% if server.game_type == 'minecraft_java' %}
+  <a class="ql" href="{% url 'control:properties' server.slug %}">📄 server.properties</a>
+  {% endif %}
+  {% endif %}
 </div>
 
 <div class="dashboard">
@@ -163,6 +186,7 @@
           <label class="toggle-lbl"><input type="checkbox" id="auto-scroll" checked> Auto-scroll</label>
           <label class="toggle-lbl"><input type="checkbox" id="pause-out"> Pauza</label>
           <button class="btn btn-sm" onclick="document.getElementById('console-out').innerHTML=''">Vyčistit</button>
+          <a class="btn btn-sm" href="{% url 'dashboard:log_download' server.slug %}" style="margin-left:auto">⬇ Stáhnout log</a>
         </div>
         <div class="cmd-row">
           <input class="cmd-input" id="cmd-input" type="text" placeholder="Příkaz → Enter"

@@ -91,6 +91,56 @@ def backup_status_api(request, slug):
 
 
 @login_required
+def log_download(request, slug):
+    """Stáhne posledních 5000 řádků log souboru serveru."""
+    import os
+    from django.http import HttpResponse
+
+    server = get_object_or_404(Server, slug=slug, is_active=True)
+    if not can_view_server(request.user, server):
+        raise PermissionDenied
+
+    log_path = server.log_file_path
+    if not log_path or not os.path.exists(log_path):
+        return HttpResponse("Log soubor nenalezen.", status=404, content_type="text/plain; charset=utf-8")
+
+    try:
+        with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+            lines = f.readlines()
+        content = "".join(lines[-5000:])
+        response = HttpResponse(content, content_type="text/plain; charset=utf-8")
+        response["Content-Disposition"] = f'attachment; filename="{server.slug}-latest.log"'
+        return response
+    except Exception as exc:
+        return HttpResponse(f"Chyba čtení logu: {exc}", status=500, content_type="text/plain; charset=utf-8")
+
+
+@login_required
+def system_stats_api(request):
+    """Vrátí aktuální využití CPU/RAM/disku hostitele."""
+    import psutil
+    cpu = psutil.cpu_percent(interval=0.2)
+    ram = psutil.virtual_memory()
+    try:
+        disk = psutil.disk_usage("/")
+    except Exception:
+        disk = None
+    data = {
+        "cpu_percent":      cpu,
+        "ram_percent":      ram.percent,
+        "ram_used_bytes":   ram.used,
+        "ram_total_bytes":  ram.total,
+    }
+    if disk:
+        data.update({
+            "disk_percent":     disk.percent,
+            "disk_used_bytes":  disk.used,
+            "disk_total_bytes": disk.total,
+        })
+    return JsonResponse(data)
+
+
+@login_required
 def server_status_api(request, slug):
     server = get_object_or_404(Server, slug=slug, is_active=True)
     if not can_view_server(request.user, server):
