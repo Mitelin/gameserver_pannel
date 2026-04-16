@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}Start profily – {{ server.name }} – GamePanel{% endblock %}
+
+{% block extra_css %}
+.page-header { display:flex; align-items:center; gap:1rem; margin-bottom:1.5rem; }
+.page-header h1 { font-size:1.2rem; font-weight:700; }
+
+.card { background:var(--bg2); border:1px solid var(--border); border-radius:var(--radius); padding:1.25rem 1.5rem; }
+
+.profile-row {
+  display:flex; align-items:center; gap:.75rem;
+  padding:.7rem 0; border-bottom:1px solid var(--border);
+}
+.profile-row:last-child { border-bottom:none; }
+.pr-name { font-weight:600; font-size:13px; min-width:150px; }
+.pr-cmd  { font-family:var(--font-mono); font-size:11px; color:var(--text-dim); flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.pr-heap { font-size:11px; color:var(--text-dim); white-space:nowrap; }
+.active-badge { font-size:10px; font-weight:700; color:var(--green); background:rgba(34,197,94,.1); padding:.1rem .4rem; border-radius:999px; }
+
+.btn { padding:.35rem .8rem; border-radius:var(--radius); font-size:12px; font-weight:600; border:none; cursor:pointer; }
+.btn-primary { background:var(--accent); color:#fff; }
+.btn-ghost { background:transparent; color:var(--text-dim); border:1px solid var(--border); }
+.btn-ghost:hover { color:var(--text); }
+.btn-green { background:rgba(34,197,94,.15); color:var(--green); border:1px solid rgba(34,197,94,.25); }
+.btn-danger { background:rgba(239,68,68,.1); color:var(--red); border:1px solid rgba(239,68,68,.25); }
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>Start profily</h1>
+  <span style="color:var(--text-dim);font-size:13px">{{ server.name }}</span>
+  <a href="/servers/{{ server.slug }}/profiles/new/" class="btn btn-primary" style="margin-left:auto">+ Nový profil</a>
+  <a href="/servers/{{ server.slug }}/edit/" class="btn btn-ghost">← Konfigurace</a>
+</div>
+
+<div class="card">
+  {% if profiles %}
+    {% for p in profiles %}
+    <div class="profile-row">
+      <div class="pr-name">
+        {{ p.name }}
+        {% if p.is_active %}<span class="active-badge">AKTIVNÍ</span>{% endif %}
+      </div>
+      <div class="pr-heap">{{ p.heap_min_mb }}–{{ p.heap_max_mb }} MB</div>
+      <div class="pr-cmd">{{ p.build_command }}</div>
+      <a href="/servers/{{ server.slug }}/profiles/{{ p.pk }}/edit/" class="btn btn-ghost">Upravit</a>
+      {% if not p.is_active %}
+        <form method="post" action="/servers/{{ server.slug }}/profiles/{{ p.pk }}/activate/" style="margin:0">
+          {% csrf_token %}
+          <button type="submit" class="btn btn-green">Aktivovat</button>
+        </form>
+        <form method="post" action="/servers/{{ server.slug }}/profiles/{{ p.pk }}/delete/" style="margin:0">
+          {% csrf_token %}
+          <button type="submit" class="btn btn-danger"
+            onclick="return confirm('Smazat profil {{ p.name }}?')">Smazat</button>
+        </form>
+      {% endif %}
+    </div>
+    {% endfor %}
+  {% else %}
+    <p style="color:var(--text-dim);font-size:13px;padding:.5rem 0">
+      Zatím žádné start profily.
+      <a href="/servers/{{ server.slug }}/profiles/new/">Vytvoř první.</a>
+    </p>
+  {% endif %}
+</div>
+{% endblock %}

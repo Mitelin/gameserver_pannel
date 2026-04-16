@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}{{ server.name }} – server.properties – GamePanel{% endblock %}
+
+{% block extra_css %}
+.page-header { display:flex; align-items:center; gap:1rem; margin-bottom:1.5rem; }
+.page-header h1 { font-size:1.2rem; font-weight:700; }
+
+.card { background:var(--bg2); border:1px solid var(--border); border-radius:var(--radius); padding:1.25rem 1.5rem; margin-bottom:1rem; }
+.card-title { font-size:.8rem; font-weight:700; text-transform:uppercase; letter-spacing:.08em; color:var(--text-dim); margin-bottom:1rem; }
+
+.props-grid { display:grid; grid-template-columns:1fr 1fr; gap:.5rem .75rem; }
+.prop-row { display:flex; flex-direction:column; gap:.2rem; }
+.prop-key { font-family:var(--font-mono); font-size:11px; color:var(--text-dim); }
+.prop-input {
+  background:var(--bg3); border:1px solid var(--border); border-radius:var(--radius);
+  color:var(--text); padding:.35rem .6rem; font-size:12px; font-family:var(--font-mono); width:100%;
+}
+.prop-input:focus { outline:none; border-color:var(--accent); }
+
+.btn { padding:.45rem 1rem; border-radius:var(--radius); font-size:13px; font-weight:600; border:none; cursor:pointer; }
+.btn-primary { background:var(--accent); color:#fff; }
+.btn-primary:hover { opacity:.9; }
+.btn-ghost { background:transparent; color:var(--text-dim); border:1px solid var(--border); }
+.btn-ghost:hover { color:var(--text); }
+
+.error-box {
+  background:rgba(239,68,68,.1); border:1px solid rgba(239,68,68,.3);
+  border-radius:var(--radius); padding:.75rem 1rem; color:var(--red); font-size:13px;
+}
+.path-hint { font-size:11px; color:var(--text-dim); margin-bottom:1rem; font-family:var(--font-mono); }
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>server.properties</h1>
+  <span style="color:var(--text-dim);font-size:13px">{{ server.name }}</span>
+  <a href="/servers/{{ server.slug }}/edit/" class="btn btn-ghost" style="margin-left:auto;font-size:12px">← Konfigurace</a>
+</div>
+
+<div class="path-hint">{{ props_path }}</div>
+
+{% if error %}
+  <div class="error-box">{{ error }}</div>
+{% else %}
+<form method="post">
+  {% csrf_token %}
+  <div class="card">
+    <div class="card-title">Vlastnosti serveru ({{ props|length }} klíčů)</div>
+    <div class="props-grid">
+      {% for key, val in props.items %}
+      <div class="prop-row">
+        <div class="prop-key">{{ key }}</div>
+        <input class="prop-input" type="text" name="{{ key }}" value="{{ val }}">
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  <div style="display:flex;gap:.75rem;margin-top:.5rem">
+    <button type="submit" class="btn btn-primary">Uložit server.properties</button>
+    <a href="/servers/{{ server.slug }}/edit/" class="btn btn-ghost">Zpět</a>
+  </div>
+</form>
+{% endif %}
+{% endblock %}

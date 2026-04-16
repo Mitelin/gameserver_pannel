@@ -107,6 +107,55 @@ class ServerProcessState(models.Model):
         return f"ProcessState({self.server.slug}, {self.status})"
 
 
+class StartProfile(models.Model):
+    """
+    JVM start profil pro Minecraft server.
+    Sestaví start_command z komponent místo ručního psaní.
+    """
+    server       = models.ForeignKey(Server, on_delete=models.CASCADE, related_name="start_profiles")
+    name         = models.CharField(max_length=64)
+    is_active    = models.BooleanField(default=False)
+
+    # JVM parametry
+    jar_file     = models.CharField(max_length=256, default="server.jar",
+                                    help_text="Název jar souboru v working_directory")
+    heap_min_mb  = models.IntegerField(default=512,  help_text="Xms v MB")
+    heap_max_mb  = models.IntegerField(default=2048, help_text="Xmx v MB")
+    jvm_flags    = models.TextField(blank=True,
+                                    help_text="Další JVM flagy, každý na novém řádku")
+    extra_args   = models.TextField(blank=True,
+                                    help_text="Argumenty za jar souborem (např. --nogui)")
+
+    created_at   = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["name"]
+        unique_together = [("server", "name")]
+
+    def __str__(self):
+        return f"{self.server.slug} / {self.name}"
+
+    def build_command(self) -> str:
+        """Sestaví start příkaz z komponent."""
+        flags = " ".join(f.strip() for f in self.jvm_flags.splitlines() if f.strip())
+        extra = " ".join(e.strip() for e in self.extra_args.splitlines() if e.strip())
+        parts = ["java", f"-Xms{self.heap_min_mb}m", f"-Xmx{self.heap_max_mb}m"]
+        if flags:
+            parts.append(flags)
+        parts += ["-jar", self.jar_file]
+        if extra:
+            parts.append(extra)
+        return " ".join(parts)
+
+    def activate(self):
+        """Nastaví tento profil jako aktivní a aktualizuje Server.start_command."""
+        StartProfile.objects.filter(server=self.server, is_active=True).update(is_active=False)
+        self.is_active = True
+        self.save(update_fields=["is_active"])
+        self.server.start_command = self.build_command()
+        self.server.save(update_fields=["start_command", "updated_at"])
+
+
 class PlayerSession(models.Model):
     """Historické záznamy join/leave hráčů."""
     server           = models.ForeignKey(Server, on_delete=models.CASCADE, related_name="player_sessions")

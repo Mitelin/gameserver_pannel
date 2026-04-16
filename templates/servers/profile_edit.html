@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block title %}{% if is_create %}Nový start profil{% else %}{{ profile.name }}{% endif %} – {{ server.name }} – GamePanel{% endblock %}
+
+{% block extra_css %}
+.page-header { display:flex; align-items:center; gap:1rem; margin-bottom:1.5rem; }
+.page-header h1 { font-size:1.2rem; font-weight:700; }
+
+.card { background:var(--bg2); border:1px solid var(--border); border-radius:var(--radius); padding:1.25rem 1.5rem; margin-bottom:1rem; }
+.card-title { font-size:.8rem; font-weight:700; text-transform:uppercase; letter-spacing:.08em; color:var(--text-dim); margin-bottom:1rem; }
+
+.field-grid { display:grid; grid-template-columns:1fr 1fr; gap:.75rem 1.25rem; }
+.field-group { display:flex; flex-direction:column; gap:.3rem; }
+.field-group.span2 { grid-column:span 2; }
+label { font-size:12px; color:var(--text-dim); }
+.field-input {
+  background:var(--bg3); border:1px solid var(--border); border-radius:var(--radius);
+  color:var(--text); padding:.45rem .7rem; font-size:13px; width:100%;
+}
+.field-input:focus { outline:none; border-color:var(--accent); }
+.field-mono { font-family:var(--font-mono); font-size:12px; }
+.field-hint { font-size:11px; color:var(--text-dim); }
+.field-error { font-size:11px; color:var(--red); }
+
+.preview-box {
+  background:var(--bg3); border:1px solid var(--border); border-radius:var(--radius);
+  padding:.75rem 1rem; font-family:var(--font-mono); font-size:12px; color:var(--accent);
+  word-break:break-all;
+}
+.preview-label { font-size:11px; color:var(--text-dim); margin-bottom:.4rem; }
+
+.btn { padding:.45rem 1rem; border-radius:var(--radius); font-size:13px; font-weight:600; border:none; cursor:pointer; }
+.btn-primary { background:var(--accent); color:#fff; }
+.btn-primary:hover { opacity:.9; }
+.btn-ghost { background:transparent; color:var(--text-dim); border:1px solid var(--border); }
+.btn-ghost:hover { color:var(--text); }
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>{% if is_create %}Nový start profil{% else %}{{ profile.name }}{% endif %}</h1>
+  <span style="color:var(--text-dim);font-size:13px">{{ server.name }}</span>
+  <a href="/servers/{{ server.slug }}/profiles/" class="btn btn-ghost" style="margin-left:auto;font-size:12px">← Profily</a>
+</div>
+
+<form method="post">
+  {% csrf_token %}
+  <div class="card">
+    <div class="card-title">JVM konfigurace</div>
+    <div class="field-grid">
+      <div class="field-group span2">
+        <label>Název profilu</label>
+        {{ form.name }}
+        {% if form.name.errors %}<div class="field-error">{{ form.name.errors.0 }}</div>{% endif %}
+      </div>
+      <div class="field-group span2">
+        <label>JAR soubor</label>
+        {{ form.jar_file }}
+        <div class="field-hint">Relativní název vůči working_directory serveru.</div>
+      </div>
+      <div class="field-group">
+        <label>Xms – minimální heap (MB)</label>
+        {{ form.heap_min_mb }}
+        {% if form.heap_min_mb.errors %}<div class="field-error">{{ form.heap_min_mb.errors.0 }}</div>{% endif %}
+      </div>
+      <div class="field-group">
+        <label>Xmx – maximální heap (MB)</label>
+        {{ form.heap_max_mb }}
+        {% if form.heap_max_mb.errors %}<div class="field-error">{{ form.heap_max_mb.errors.0 }}</div>{% endif %}
+      </div>
+      <div class="field-group span2">
+        <label>Další JVM flagy (každý na novém řádku)</label>
+        {{ form.jvm_flags }}
+        <div class="field-hint">Např. -XX:+UseG1GC  -XX:MaxGCPauseMillis=200</div>
+      </div>
+      <div class="field-group span2">
+        <label>Argumenty za JAR souborem</label>
+        {{ form.extra_args }}
+      </div>
+    </div>
+    {% if form.non_field_errors %}
+      <div class="field-error" style="margin-top:.5rem">{{ form.non_field_errors.0 }}</div>
+    {% endif %}
+  </div>
+
+  {% if preview %}
+  <div class="card">
+    <div class="preview-label">Výsledný příkaz (aktuálně uloženo)</div>
+    <div class="preview-box">{{ preview }}</div>
+  </div>
+  {% endif %}
+
+  <div style="display:flex;gap:.75rem">
+    <button type="submit" class="btn btn-primary">{% if is_create %}Vytvořit profil{% else %}Uložit profil{% endif %}</button>
+    <a href="/servers/{{ server.slug }}/profiles/" class="btn btn-ghost">Zrušit</a>
+  </div>
+</form>
+{% endblock %}

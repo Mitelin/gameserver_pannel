@@ -67,6 +67,7 @@
       {% if user.is_authenticated %}
         <a href="/">Servery</a>
         {% if user.is_staff %}
+          <a href="/servers/new/">+ Server</a>
           <a href="/users/">Uživatelé</a>
           <a href="/settings/">Nastavení</a>
           <a href="/runtime/">Runtime</a>

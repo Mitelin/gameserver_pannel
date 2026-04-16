@@ -1,0 +1,220 @@
+{% extends "base.html" %}
+{% block title %}{% if is_create %}Nový server{% else %}{{ server.name }} – konfigurace{% endif %} – GamePanel{% endblock %}
+
+{% block extra_css %}
+.page-header { display:flex; align-items:center; gap:1rem; margin-bottom:1.5rem; }
+.page-header h1 { font-size:1.2rem; font-weight:700; }
+.page-header .badge { padding:.2rem .6rem; border-radius:999px; font-size:11px; font-weight:600; background:var(--bg3); color:var(--text-dim); }
+
+.card { background:var(--bg2); border:1px solid var(--border); border-radius:var(--radius); padding:1.25rem 1.5rem; margin-bottom:1rem; }
+.card-title { font-size:.8rem; font-weight:700; text-transform:uppercase; letter-spacing:.08em; color:var(--text-dim); margin-bottom:1rem; }
+
+.field-grid { display:grid; grid-template-columns:1fr 1fr; gap:.75rem 1.25rem; }
+.field-grid.single { grid-template-columns:1fr; }
+.field-group { display:flex; flex-direction:column; gap:.3rem; }
+.field-group.span2 { grid-column:span 2; }
+label { font-size:12px; color:var(--text-dim); }
+.field-input {
+  background:var(--bg3); border:1px solid var(--border); border-radius:var(--radius);
+  color:var(--text); padding:.45rem .7rem; font-size:13px; width:100%;
+}
+.field-input:focus { outline:none; border-color:var(--accent); }
+.field-mono { font-family:var(--font-mono); font-size:12px; }
+.field-hint { font-size:11px; color:var(--text-dim); margin-top:.15rem; }
+.field-error { font-size:11px; color:var(--red); }
+
+.checkbox-row { display:flex; align-items:center; gap:.5rem; font-size:13px; }
+.checkbox-row input[type=checkbox] { accent-color:var(--accent); width:15px; height:15px; }
+
+.btn { padding:.45rem 1rem; border-radius:var(--radius); font-size:13px; font-weight:600; border:none; cursor:pointer; }
+.btn-primary { background:var(--accent); color:#fff; }
+.btn-primary:hover { opacity:.9; }
+.btn-danger  { background:rgba(239,68,68,.15); color:var(--red); border:1px solid rgba(239,68,68,.3); }
+.btn-danger:hover { background:rgba(239,68,68,.25); }
+.btn-ghost   { background:transparent; color:var(--text-dim); border:1px solid var(--border); }
+.btn-ghost:hover { color:var(--text); }
+
+.actions { display:flex; gap:.75rem; align-items:center; margin-top:1.25rem; }
+
+.profile-list { margin-top:1rem; display:flex; flex-direction:column; gap:.5rem; }
+.profile-item {
+  display:flex; align-items:center; gap:.75rem;
+  background:var(--bg3); border:1px solid var(--border); border-radius:var(--radius);
+  padding:.6rem 1rem; font-size:13px;
+}
+.profile-item .pi-name { flex:1; font-weight:600; }
+.profile-item .pi-cmd  { font-family:var(--font-mono); font-size:11px; color:var(--text-dim); flex:2; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.profile-active { color:var(--green); font-size:11px; font-weight:700; }
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <h1>{% if is_create %}Nový server{% else %}{{ server.name }}{% endif %}</h1>
+  {% if not is_create %}
+    <span class="badge">{{ server.get_game_type_display }}</span>
+    {% if server.is_active %}<span class="badge" style="color:var(--green)">aktivní</span>{% endif %}
+  {% endif %}
+  {% if not is_create and is_minecraft %}
+    <a href="/servers/{{ server.slug }}/profiles/" class="btn btn-ghost" style="margin-left:auto">Start profily</a>
+    <a href="/servers/{{ server.slug }}/properties/" class="btn btn-ghost">server.properties</a>
+  {% endif %}
+</div>
+
+<form method="post">
+  {% csrf_token %}
+
+  {# Základní informace #}
+  <div class="card">
+    <div class="card-title">Základní informace</div>
+    <div class="field-grid">
+      <div class="field-group">
+        <label>Název</label>
+        {{ form.name }}
+        {% if form.name.errors %}<div class="field-error">{{ form.name.errors.0 }}</div>{% endif %}
+      </div>
+      <div class="field-group">
+        <label>Slug (URL)</label>
+        {{ form.slug }}
+        {% if form.slug.errors %}<div class="field-error">{{ form.slug.errors.0 }}</div>{% endif %}
+        <div class="field-hint">{{ form.slug.help_text }}</div>
+      </div>
+      <div class="field-group">
+        <label>Typ hry</label>
+        {{ form.game_type }}
+      </div>
+      <div class="field-group" style="justify-content:flex-end; padding-top:1.2rem">
+        <label class="checkbox-row">
+          {{ form.is_active }} Aktivní
+        </label>
+      </div>
+    </div>
+  </div>
+
+  {# Procesní konfigurace #}
+  <div class="card">
+    <div class="card-title">Procesní konfigurace</div>
+    <div class="field-grid">
+      <div class="field-group span2">
+        <label>Pracovní adresář</label>
+        {{ form.working_directory }}
+        {% if form.working_directory.errors %}<div class="field-error">{{ form.working_directory.errors.0 }}</div>{% endif %}
+      </div>
+      <div class="field-group span2">
+        <label>Start příkaz</label>
+        {{ form.start_command }}
+        <div class="field-hint">{{ form.start_command.help_text }}</div>
+        {% if form.start_command.errors %}<div class="field-error">{{ form.start_command.errors.0 }}</div>{% endif %}
+      </div>
+      <div class="field-group">
+        <label>Stop příkaz (pošle se do konzole)</label>
+        {{ form.stop_command }}
+      </div>
+      <div class="field-group">
+        <label>tmux session name</label>
+        {{ form.tmux_session_name }}
+        <div class="field-hint">{{ form.tmux_session_name.help_text }}</div>
+        {% if form.tmux_session_name.errors %}<div class="field-error">{{ form.tmux_session_name.errors.0 }}</div>{% endif %}
+      </div>
+      <div class="field-group span2">
+        <label>Cesta k log souboru</label>
+        {{ form.log_file_path }}
+      </div>
+      <div class="field-group">
+        <label>Startup timeout (s)</label>
+        {{ form.expected_startup_seconds }}
+      </div>
+      <div class="field-group">
+        <label>Shutdown timeout (s)</label>
+        {{ form.expected_shutdown_seconds }}
+      </div>
+    </div>
+  </div>
+
+  {# RCON #}
+  <div class="card">
+    <div class="card-title">RCON</div>
+    <div class="field-grid">
+      <div class="field-group" style="grid-column:span 2">
+        <label class="checkbox-row">{{ form.rcon_enabled }} Zapnout RCON</label>
+      </div>
+      <div class="field-group">
+        <label>RCON host</label>
+        {{ form.rcon_host }}
+      </div>
+      <div class="field-group">
+        <label>RCON port</label>
+        {{ form.rcon_port }}
+      </div>
+      <div class="field-group span2">
+        <label>RCON heslo</label>
+        {{ form.rcon_password }}
+      </div>
+    </div>
+  </div>
+
+  {# Webhooky #}
+  <div class="card">
+    <div class="card-title">Webhook notifikace</div>
+    <div class="field-grid">
+      <div class="field-group span2">
+        <label>Webhook URL (Discord / Slack)</label>
+        {{ form.webhook_url }}
+      </div>
+      <div class="field-group">
+        <label class="checkbox-row">{{ form.webhook_on_crash }} Crash</label>
+      </div>
+      <div class="field-group">
+        <label class="checkbox-row">{{ form.webhook_on_start }} Start</label>
+      </div>
+      <div class="field-group">
+        <label class="checkbox-row">{{ form.webhook_on_stop }} Stop</label>
+      </div>
+    </div>
+  </div>
+
+  <div class="actions">
+    <button type="submit" class="btn btn-primary">{% if is_create %}Vytvořit server{% else %}Uložit změny{% endif %}</button>
+    <a href="/" class="btn btn-ghost">Zpět</a>
+    {% if not is_create %}
+      <form method="post" action="/servers/{{ server.slug }}/delete/" style="margin:0;margin-left:auto">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-danger"
+          onclick="return confirm('Opravdu smazat server {{ server.name }}? Tuto akci nelze vrátit.')">
+          Smazat server
+        </button>
+      </form>
+    {% endif %}
+  </div>
+</form>
+
+{% if not is_create and is_minecraft and profiles is not None %}
+<div class="card" style="margin-top:1.5rem">
+  <div class="card-title" style="display:flex;align-items:center;justify-content:space-between">
+    <span>Start profily</span>
+    <a href="/servers/{{ server.slug }}/profiles/new/" class="btn btn-ghost" style="font-size:12px;padding:.3rem .7rem">+ Nový profil</a>
+  </div>
+  {% if profiles %}
+    <div class="profile-list">
+      {% for p in profiles %}
+      <div class="profile-item">
+        <div class="pi-name">
+          {{ p.name }}
+          {% if p.is_active %}<span class="profile-active">● AKTIVNÍ</span>{% endif %}
+        </div>
+        <div class="pi-cmd">{{ p.build_command }}</div>
+        <a href="/servers/{{ server.slug }}/profiles/{{ p.pk }}/edit/" class="btn btn-ghost" style="font-size:11px;padding:.2rem .5rem">Upravit</a>
+        {% if not p.is_active %}
+        <form method="post" action="/servers/{{ server.slug }}/profiles/{{ p.pk }}/activate/" style="margin:0">
+          {% csrf_token %}
+          <button type="submit" class="btn btn-ghost" style="font-size:11px;padding:.2rem .5rem;color:var(--green)">Aktivovat</button>
+        </form>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <p style="color:var(--text-dim);font-size:13px">Žádné profily. <a href="/servers/{{ server.slug }}/profiles/new/">Vytvoř první profil.</a></p>
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}
