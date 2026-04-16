@@ -82,6 +82,15 @@ def server_detail(request, slug):
 
 
 @login_required
+def backup_status_api(request, slug):
+    server = get_object_or_404(Server, slug=slug, is_active=True)
+    if not can_view_server(request.user, server):
+        raise PermissionDenied
+    from apps.servers.backup import check_backup_status
+    return JsonResponse(check_backup_status(server))
+
+
+@login_required
 def server_status_api(request, slug):
     server = get_object_or_404(Server, slug=slug, is_active=True)
     if not can_view_server(request.user, server):

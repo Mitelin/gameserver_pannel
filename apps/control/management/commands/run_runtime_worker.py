@@ -379,14 +379,17 @@ def _watchdog_loop(stop_event: threading.Event):
     backend       = LocalTmuxProcessBackend()
     channel_layer = get_channel_layer()
 
-    no_players_tick = 0  # kontroluj no_players alerty každých ~60 s (12 ticků × 5 s)
+    no_players_tick = 0  # každých ~60 s  (12 × 5 s)
+    backup_tick     = 0  # každých ~720 s (144 × 5 s = 12 minut)
 
     while not stop_event.is_set():
         try:
             no_players_tick += 1
+            backup_tick     += 1
             check_no_players = (no_players_tick >= 12)
-            if check_no_players:
-                no_players_tick = 0
+            check_backup     = (backup_tick     >= 144)
+            if check_no_players: no_players_tick = 0
+            if check_backup:     backup_tick     = 0
 
             for server in Server.objects.filter(is_active=True).select_related("process_state"):
                 try:
@@ -394,6 +397,8 @@ def _watchdog_loop(stop_event: threading.Event):
                     if check_no_players and server.status == ServerStatus.ONLINE:
                         from apps.alerts.engine import check_no_players_alert
                         check_no_players_alert(server)
+                    if check_backup and server.backup_directory:
+                        _check_backup(server)
                 except Exception as exc:
                     logger.exception("Watchdog chyba pro %s: %s", server.slug, exc)
 
@@ -405,6 +410,22 @@ def _watchdog_loop(stop_event: threading.Event):
         stop_event.wait(WATCHDOG_INTERVAL)
 
     logger.info("Watchdog thread ukončen.")
+
+
+def _check_backup(server):
+    """Zkontroluje stáří backupů a zaloguje audit event pokud jsou staré."""
+    from apps.servers.backup import check_backup_status
+    from apps.audit.models import AuditEvent
+    result = check_backup_status(server)
+    if result.get("ok") is False:
+        AuditEvent.objects.create(
+            server=server,
+            event_type="server.backup.stale",
+            severity="warning",
+            message=result.get("message", "Backup je starý nebo chybí."),
+            payload_json=result,
+        )
+        logger.warning("[%s] Backup problém: %s", server.slug, result.get("message"))
 
 
 def _watchdog_check(server, backend, channel_layer):

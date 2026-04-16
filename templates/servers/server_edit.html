@@ -158,6 +158,38 @@ label { font-size:12px; color:var(--text-dim); }
     </div>
   </div>
 
+  {# Zálohy #}
+  <div class="card">
+    <div class="card-title">Monitorování záloh</div>
+    <div class="field-grid">
+      <div class="field-group span2">
+        <label>Adresář se zálohami</label>
+        {{ form.backup_directory }}
+        <div class="field-hint">Pokud je nastaven, watchdog kontroluje stáří souborů v tomto adresáři.</div>
+        {% if form.backup_directory.errors %}<div class="field-error">{{ form.backup_directory.errors.0 }}</div>{% endif %}
+      </div>
+      <div class="field-group">
+        <label>Max. stáří zálohy (hodiny)</label>
+        {{ form.backup_max_age_hours }}
+        <div class="field-hint">Alert pokud je poslední záloha starší.</div>
+      </div>
+    </div>
+    {% if not is_create and server.backup_directory %}
+    <div id="backup-status" style="margin-top:.75rem;font-size:12px;color:var(--text-dim)">
+      Načítám stav zálohy…
+    </div>
+    <script>
+    fetch("/servers/{{ server.slug }}/backup-status/")
+      .then(r=>r.json()).then(d=>{
+        const el=document.getElementById("backup-status");
+        const color = d.ok===true?"var(--green)":d.ok===false?"var(--red)":"var(--text-dim)";
+        el.style.color=color;
+        el.textContent=d.message;
+      }).catch(()=>{});
+    </script>
+    {% endif %}
+  </div>
+
   {# Webhooky #}
   <div class="card">
     <div class="card-title">Webhook notifikace</div>

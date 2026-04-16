@@ -19,6 +19,7 @@ class ServerForm(forms.ModelForm):
             "expected_startup_seconds", "expected_shutdown_seconds",
             "rcon_enabled", "rcon_host", "rcon_port", "rcon_password",
             "webhook_url", "webhook_on_crash", "webhook_on_start", "webhook_on_stop",
+            "backup_directory", "backup_max_age_hours",
         ]
         widgets = {
             "name":              forms.TextInput(attrs={"class": "field-input"}),
@@ -32,7 +33,9 @@ class ServerForm(forms.ModelForm):
             "rcon_host":         forms.TextInput(attrs={"class": "field-input", "placeholder": "127.0.0.1"}),
             "rcon_port":         forms.NumberInput(attrs={"class": "field-input"}),
             "rcon_password":     forms.PasswordInput(attrs={"class": "field-input"}, render_value=True),
-            "webhook_url":       forms.URLInput(attrs={"class": "field-input"}),
+            "webhook_url":           forms.URLInput(attrs={"class": "field-input"}),
+            "backup_directory":      forms.TextInput(attrs={"class": "field-input", "placeholder": "/srv/mc/backups"}),
+            "backup_max_age_hours":  forms.NumberInput(attrs={"class": "field-input"}),
         }
         help_texts = {
             "slug":              "URL identifikátor – jen malá písmena, čísla, pomlčky.",

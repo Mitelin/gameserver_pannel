@@ -132,6 +132,13 @@
       {% if server.webhook_url %}
         <span style="font-size:11px;color:#4f8ef7">Webhook ✓</span>
       {% endif %}
+      {% if user.is_staff %}
+        <a href="/servers/{{ server.slug }}/edit/" onclick="event.stopPropagation()"
+           style="font-size:11px;color:var(--text-dim);text-decoration:none;padding:.2rem .5rem;
+                  border:1px solid var(--border);border-radius:3px">
+          ⚙ Config
+        </a>
+      {% endif %}
       <span class="btn-manage">Spravovat →</span>
     </div>
   </a>
@@ -140,7 +147,10 @@
 
 {% else %}
 <div class="empty">
-  Žádné aktivní servery. Přidej server přes <a href="/admin/">administraci</a>.
+  Žádné aktivní servery.
+  {% if user.is_staff %}
+    <br><br><a href="/servers/new/" style="background:var(--accent);color:#fff;padding:.45rem 1.1rem;border-radius:var(--radius);font-size:13px;font-weight:600;text-decoration:none">+ Přidat server</a>
+  {% endif %}
 </div>
 {% endif %}
 {% endblock %}
