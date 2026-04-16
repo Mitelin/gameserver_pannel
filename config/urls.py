@@ -20,8 +20,8 @@ urlpatterns = [
     path("runtime/",  runtime_status_view, name="runtime_status"),
     path("users/",    include("apps.users.urls")),
 
-    path("",          include("apps.dashboard.urls")),
     path("servers/new/", server_create, name="server_create"),
+    path("",          include("apps.dashboard.urls")),
     path("servers/",  include("apps.control.urls")),
     path("servers/",  include("apps.metrics.urls")),
     path("servers/",  include("apps.audit.urls")),
