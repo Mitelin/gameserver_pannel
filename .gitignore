@@ -3,6 +3,9 @@
 .env.*
 !.env.example
 
+# Claude Code local settings (don't commit)
+.claude/
+
 # Python
 .venv/
 venv/

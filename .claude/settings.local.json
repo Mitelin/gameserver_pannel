@@ -1,9 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(curl -s -o /dev/null -w \"/ -> %{http_code} %{redirect_url}\\\\n\" http://127.0.0.1:8000/)",
-      "Bash(curl -s -o /dev/null -w \"/static/ -> %{http_code}\\\\n\" http://127.0.0.1:8000/static/)",
-      "Bash(curl -s -o /dev/null -w \"/health/ -> %{http_code}\\\\n\" http://127.0.0.1:8000/health/)"
-    ]
-  }
-}
