@@ -102,10 +102,21 @@ label { font-size:12px; color:var(--text-dim); }
   <div class="card">
     <div class="card-title">Kanál a zpráva</div>
     <div class="field-grid">
-      <div class="field-group span2">
+      <div class="field-group">
+        <label>Kanál notifikace</label>
+        {{ form.channel }}
+        {% if form.channel.errors %}<div class="field-error">{{ form.channel.errors.0 }}</div>{% endif %}
+      </div>
+      <div class="field-group" id="sec-channel-webhook">
         <label>Webhook URL (Discord/Slack/Teams)</label>
         {{ form.webhook_url }}
         {% if form.webhook_url.errors %}<div class="field-error">{{ form.webhook_url.errors.0 }}</div>{% endif %}
+      </div>
+      <div class="field-group" id="sec-channel-email" style="display:none">
+        <label>Emailová adresa</label>
+        {{ form.email_address }}
+        <div class="field-hint">{{ form.email_address.help_text }}</div>
+        {% if form.email_address.errors %}<div class="field-error">{{ form.email_address.errors.0 }}</div>{% endif %}
       </div>
       <div class="field-group span2">
         <label>Šablona zprávy</label>
@@ -128,6 +139,7 @@ label { font-size:12px; color:var(--text-dim); }
 
 <script>
 (function() {
+  // Podmínka sekce
   const sel = document.querySelector('[name=condition_type]');
   const sections = {
     'status_change':  ['sec-status'],
@@ -138,15 +150,26 @@ label { font-size:12px; color:var(--text-dim); }
   };
   const all = ['sec-status','sec-threshold','sec-noplayers','sec-logpattern'];
 
-  function update() {
+  function updateCond() {
     const show = sections[sel.value] || [];
     all.forEach(id => {
       const el = document.getElementById(id);
       if (el) el.style.display = show.includes(id) ? '' : 'none';
     });
   }
-  sel.addEventListener('change', update);
-  update();
+  sel.addEventListener('change', updateCond);
+  updateCond();
+
+  // Kanál sekce
+  const chanSel = document.querySelector('[name=channel]');
+  function updateChannel() {
+    const isEmail   = chanSel.value === 'email';
+    const isWebhook = chanSel.value === 'webhook';
+    document.getElementById('sec-channel-webhook').style.display = isWebhook ? '' : 'none';
+    document.getElementById('sec-channel-email').style.display   = isEmail   ? '' : 'none';
+  }
+  chanSel.addEventListener('change', updateChannel);
+  updateChannel();
 })();
 </script>
 {% endblock %}

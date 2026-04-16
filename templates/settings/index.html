@@ -191,9 +191,95 @@
       </div>
     </div>
 
+    {# ── SMTP ─────────────────────────────────────────────── #}
+    <div class="settings-section">
+      <div class="section-head">Email (SMTP)</div>
+      <div class="section-body">
+        <div class="form-grid" style="margin-bottom:.75rem">
+          <div class="form-group" style="flex-direction:row;align-items:center;gap:.5rem">
+            {{ form.smtp_enabled }}
+            <label style="text-transform:none;letter-spacing:0;font-size:13px;color:var(--text)">{{ form.smtp_enabled.label }}</label>
+          </div>
+        </div>
+        <div class="form-grid">
+          <div class="form-group">
+            <label>{{ form.smtp_host.label }}</label>
+            {{ form.smtp_host }}
+            <div class="help-text">{{ form.smtp_host.help_text }}</div>
+            {% for e in form.smtp_host.errors %}<div class="error-text">{{ e }}</div>{% endfor %}
+          </div>
+          <div class="form-group">
+            <label>{{ form.smtp_port.label }}</label>
+            {{ form.smtp_port }}
+            <div class="help-text">{{ form.smtp_port.help_text }}</div>
+          </div>
+          <div class="form-group">
+            <label>{{ form.smtp_username.label }}</label>
+            {{ form.smtp_username }}
+          </div>
+          <div class="form-group">
+            <label>{{ form.smtp_password.label }}</label>
+            {{ form.smtp_password }}
+          </div>
+          <div class="form-group">
+            <label>{{ form.smtp_from_address.label }}</label>
+            {{ form.smtp_from_address }}
+            <div class="help-text">{{ form.smtp_from_address.help_text }}</div>
+            {% for e in form.smtp_from_address.errors %}<div class="error-text">{{ e }}</div>{% endfor %}
+          </div>
+          <div class="form-group" style="justify-content:flex-end;flex-direction:row;align-items:center;gap:1rem">
+            <div style="display:flex;flex-direction:column;gap:.3rem">
+              <div style="flex-direction:row;display:flex;align-items:center;gap:.5rem">
+                {{ form.smtp_use_tls }}
+                <label style="text-transform:none;letter-spacing:0;font-size:13px;color:var(--text)">{{ form.smtp_use_tls.label }}</label>
+              </div>
+              <div style="flex-direction:row;display:flex;align-items:center;gap:.5rem">
+                {{ form.smtp_use_ssl }}
+                <label style="text-transform:none;letter-spacing:0;font-size:13px;color:var(--text)">{{ form.smtp_use_ssl.label }}</label>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {# Test email #}
+        <div style="margin-top:1rem;padding-top:1rem;border-top:1px solid var(--border);display:flex;align-items:center;gap:.75rem;flex-wrap:wrap">
+          <input type="email" id="test-email-addr" placeholder="test@example.com"
+                 style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);
+                        padding:.45rem .7rem;font-size:13px;color:var(--text);width:220px;outline:none">
+          <button type="button" class="btn" id="btn-test-email"
+                  style="background:rgba(79,142,247,.15);color:#4f8ef7;border:1px solid rgba(79,142,247,.3)">
+            Odeslat test email
+          </button>
+          <span id="test-email-result" style="font-size:12px"></span>
+        </div>
+      </div>
+    </div>
+
     <div class="settings-actions">
       <button type="submit" class="btn btn-primary">Uložit nastavení</button>
     </div>
   </form>
 </div>
+
+{% block extra_js %}
+<script>
+document.getElementById("btn-test-email").addEventListener("click", async function(){
+  const addr = document.getElementById("test-email-addr").value.trim();
+  const res  = document.getElementById("test-email-result");
+  if(!addr){ res.textContent="Zadej emailovou adresu."; res.style.color="var(--red)"; return; }
+  this.disabled = true; res.textContent = "Odesílám…"; res.style.color = "var(--text-dim)";
+  try{
+    const r = await fetch("/settings/test-email/", {
+      method: "POST",
+      headers: {"X-CSRFToken": "{{ csrf_token }}", "Content-Type": "application/x-www-form-urlencoded"},
+      body: "email=" + encodeURIComponent(addr),
+    });
+    const d = await r.json();
+    res.textContent = d.message;
+    res.style.color = d.ok ? "#22c55e" : "var(--red)";
+  } catch(e){ res.textContent = "Chyba sítě."; res.style.color = "var(--red)"; }
+  this.disabled = false;
+});
+</script>
+{% endblock %}
 {% endblock %}

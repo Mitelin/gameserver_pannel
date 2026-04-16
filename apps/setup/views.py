@@ -351,3 +351,24 @@ def settings_view(request):
         form = SystemSettingsForm(initial=initial)
 
     return render(request, "settings/index.html", {"form": form, "obj": obj})
+
+
+def test_email_view(request):
+    """POST /settings/test-email/ – pošle testovací email."""
+    from django.contrib.auth.decorators import login_required
+    from django.http import JsonResponse
+    from django.views.decorators.http import require_POST
+
+    if not request.user.is_authenticated or not request.user.is_staff:
+        return JsonResponse({"ok": False, "message": "Přístup odepřen."}, status=403)
+
+    if request.method != "POST":
+        return JsonResponse({"ok": False, "message": "Pouze POST."}, status=405)
+
+    to_address = request.POST.get("email", "").strip()
+    if not to_address:
+        return JsonResponse({"ok": False, "message": "Zadej emailovou adresu."})
+
+    from apps.alerts.engine import send_test_email
+    ok, msg = send_test_email(to_address)
+    return JsonResponse({"ok": ok, "message": msg})

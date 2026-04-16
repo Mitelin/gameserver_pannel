@@ -4,7 +4,7 @@ config/urls.py  –  hlavní URL routing
 from django.contrib import admin
 from django.urls import path, include
 from django.contrib.auth import views as auth_views
-from apps.setup.views import settings_view, runtime_status_view
+from apps.setup.views import settings_view, runtime_status_view, test_email_view
 from apps.servers.views import server_create
 
 urlpatterns = [
@@ -16,7 +16,8 @@ urlpatterns = [
     path("accounts/password-change/done/", auth_views.PasswordChangeDoneView.as_view(template_name="registration/password_change_done.html"), name="password_change_done"),
 
     path("setup/",    include("apps.setup.urls")),
-    path("settings/", settings_view,       name="settings"),
+    path("settings/",            settings_view,    name="settings"),
+    path("settings/test-email/", test_email_view,  name="test_email"),
     path("runtime/",  runtime_status_view, name="runtime_status"),
     path("users/",    include("apps.users.urls")),
 

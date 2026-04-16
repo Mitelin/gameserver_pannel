@@ -152,6 +152,30 @@ class SystemSettingsForm(forms.Form):
         label="Alert cooldown (minuty)", min_value=1, max_value=60, initial=15,
     )
 
+    # ── SMTP ──────────────────────────────────────────────────────────────
+    smtp_enabled      = forms.BooleanField(label="Povolit emailové alerty", required=False)
+    smtp_host         = forms.CharField(
+        label="SMTP host", max_length=256, required=False,
+        help_text="Např. smtp.gmail.com nebo smtp.sendgrid.net",
+        widget=forms.TextInput(attrs={"placeholder": "smtp.gmail.com"}),
+    )
+    smtp_port         = forms.IntegerField(
+        label="SMTP port", initial=587, min_value=1, max_value=65535,
+        help_text="587 = STARTTLS, 465 = SSL, 25 = plain",
+    )
+    smtp_use_tls      = forms.BooleanField(label="Použít STARTTLS (port 587)", required=False, initial=True)
+    smtp_use_ssl      = forms.BooleanField(label="Použít SSL (port 465)", required=False)
+    smtp_username     = forms.CharField(label="SMTP uživatel", max_length=256, required=False)
+    smtp_password     = forms.CharField(
+        label="SMTP heslo", max_length=256, required=False,
+        widget=forms.PasswordInput(render_value=True),
+    )
+    smtp_from_address = forms.EmailField(
+        label="Odesílací adresa", required=False,
+        help_text="Např. panel@example.com",
+        widget=forms.EmailInput(attrs={"placeholder": "panel@example.com"}),
+    )
+
     # Pole zobrazená ve wizardu (krok 3) – ostatní jsou jen v /settings/
     WIZARD_FIELDS = [
         "panel_name", "public_base_url", "timezone", "default_language",

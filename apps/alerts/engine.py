@@ -139,6 +139,9 @@ def _send_alert(rule: AlertRule, details: str, value: str):
     sent_ok = False
     if rule.channel == "webhook":
         sent_ok = _send_webhook(rule.webhook_url, message)
+    elif rule.channel == "email":
+        subject = f"[{server.name}] Alert: {rule.get_condition_type_display()}"
+        sent_ok = _send_email(rule.email_address, subject, message)
 
     AlertFire.objects.create(
         rule=rule,
@@ -165,3 +168,63 @@ def _send_webhook(url: str, message: str) -> bool:
     except requests.RequestException as exc:
         logger.warning("Webhook selhal: %s", exc)
         return False
+
+
+def _send_email(to_address: str, subject: str, body: str) -> bool:
+    """Pošle email přes SMTP konfiguraci z SystemSettings."""
+    if not to_address:
+        logger.warning("Email alert: chybí cílová adresa.")
+        return False
+    try:
+        from apps.setup.models import SystemSettings
+        cfg = SystemSettings.get()
+        if not cfg.smtp_enabled:
+            logger.warning("Email alert: SMTP není povoleno v nastavení.")
+            return False
+        if not cfg.smtp_host or not cfg.smtp_from_address:
+            logger.warning("Email alert: neúplná SMTP konfigurace (chybí host nebo from adresa).")
+            return False
+
+        import smtplib
+        from email.mime.text import MIMEText
+        from email.mime.multipart import MIMEMultipart
+
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"]    = cfg.smtp_from_address
+        msg["To"]      = to_address
+        msg.attach(MIMEText(body, "plain", "utf-8"))
+
+        if cfg.smtp_use_ssl:
+            smtp_cls = smtplib.SMTP_SSL
+        else:
+            smtp_cls = smtplib.SMTP
+
+        with smtp_cls(cfg.smtp_host, cfg.smtp_port, timeout=10) as server:
+            if cfg.smtp_use_tls and not cfg.smtp_use_ssl:
+                server.starttls()
+            if cfg.smtp_username:
+                server.login(cfg.smtp_username, cfg.smtp_password)
+            server.sendmail(cfg.smtp_from_address, [to_address], msg.as_string())
+
+        return True
+    except Exception as exc:
+        logger.error("Email odesílání selhalo: %s", exc)
+        return False
+
+
+def send_test_email(to_address: str) -> tuple[bool, str]:
+    """Pošle testovací email – vrátí (ok, zpráva)."""
+    try:
+        from apps.setup.models import SystemSettings
+        cfg = SystemSettings.get()
+        if not cfg.smtp_enabled:
+            return False, "SMTP není povoleno."
+        if not cfg.smtp_host or not cfg.smtp_from_address:
+            return False, "Neúplná SMTP konfigurace."
+        ok = _send_email(to_address, "GamePanel – test emailu", "Tento email byl odeslán jako test SMTP konfigurace.")
+        if ok:
+            return True, f"Test email byl odeslán na {to_address}."
+        return False, "Odesílání selhalo – zkontroluj logy."
+    except Exception as exc:
+        return False, str(exc)

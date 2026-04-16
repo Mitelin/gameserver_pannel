@@ -19,7 +19,7 @@ import uuid
 
 class AlertChannel(models.TextChoices):
     WEBHOOK = "webhook", "Webhook (Discord/Slack/Teams)"
-    # EMAIL = "email", "Email"  # budoucí fáze
+    EMAIL   = "email",   "Email"
 
 
 class AlertConditionType(models.TextChoices):
@@ -49,8 +49,9 @@ class AlertRule(models.Model):
     log_pattern     = models.CharField(max_length=256, blank=True)
 
     # Kanál
-    channel     = models.CharField(max_length=16, choices=AlertChannel.choices, default=AlertChannel.WEBHOOK)
-    webhook_url = models.URLField()
+    channel       = models.CharField(max_length=16, choices=AlertChannel.choices, default=AlertChannel.WEBHOOK)
+    webhook_url   = models.URLField(blank=True)
+    email_address = models.EmailField(blank=True, help_text="Cílová emailová adresa (pro kanál Email)")
     # Šablona zprávy – podporuje {server_name}, {status}, {value}
     message_template = models.TextField(
         default="🚨 [{server_name}] Alert: {condition} – {details}",

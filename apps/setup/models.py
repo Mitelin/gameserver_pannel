@@ -60,6 +60,16 @@ class SystemSettings(models.Model):
         default=15, help_text="Minimální pauza mezi stejnými alerty (minuty)",
     )
 
+    # ── SMTP (email alerty) ───────────────────────────────────────────────
+    smtp_enabled      = models.BooleanField(default=False, help_text="Povolit odesílání emailů")
+    smtp_host         = models.CharField(max_length=256, blank=True, help_text="SMTP server, např. smtp.gmail.com")
+    smtp_port         = models.IntegerField(default=587, help_text="SMTP port (587 = TLS, 465 = SSL, 25 = plain)")
+    smtp_use_tls      = models.BooleanField(default=True, help_text="Použít STARTTLS (port 587)")
+    smtp_use_ssl      = models.BooleanField(default=False, help_text="Použít SSL (port 465)")
+    smtp_username     = models.CharField(max_length=256, blank=True, help_text="Přihlašovací jméno k SMTP")
+    smtp_password     = models.CharField(max_length=256, blank=True, help_text="Heslo k SMTP (uloženo plaintext)")
+    smtp_from_address = models.EmailField(blank=True, help_text="Odesílací adresa, např. panel@example.com")
+
     class Meta:
         verbose_name        = "System Settings"
         verbose_name_plural = "System Settings"
