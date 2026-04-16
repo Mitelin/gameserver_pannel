@@ -7,6 +7,12 @@ from apps.servers import views as server_views
 app_name = "control"
 
 urlpatterns = [
+    # Hromadné akce
+    path("bulk/",                           views.BulkActionView.as_view(),  name="bulk_action"),
+
+    # Export / Import
+    path("import/",                         server_views.server_import,      name="server_import"),
+
     # Server akce
     path("<slug:slug>/actions/start/",      views.StartView.as_view(),       name="start"),
     path("<slug:slug>/actions/stop/",       views.StopView.as_view(),        name="stop"),
@@ -22,6 +28,9 @@ urlpatterns = [
 
     # Config history (fáze 5)
     path("<slug:slug>/history/",           server_views.server_history,    name="server_history"),
+
+    # Export (fáze 9)
+    path("<slug:slug>/export/",            server_views.server_export,     name="server_export"),
 
     # Start profily (Minecraft)
     path("<slug:slug>/profiles/",                      server_views.profile_list,     name="profile_list"),

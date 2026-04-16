@@ -74,11 +74,44 @@
 .badge-starting .dot,.badge-stopping .dot{animation:pulse 1.2s ease-in-out infinite}
 
 .empty{text-align:center;padding:3rem;color:var(--text-dim)}
+
+/* Bulk action bar */
+.bulk-bar{
+  position:fixed;bottom:1.25rem;left:50%;transform:translateX(-50%);
+  background:var(--bg2);border:1px solid var(--border);border-radius:99px;
+  padding:.5rem .75rem;display:flex;align-items:center;gap:.6rem;
+  box-shadow:0 4px 24px rgba(0,0,0,.5);z-index:100;
+  opacity:0;pointer-events:none;transition:opacity .2s,transform .2s;
+  transform:translateX(-50%) translateY(8px)
+}
+.bulk-bar.visible{opacity:1;pointer-events:all;transform:translateX(-50%) translateY(0)}
+.bulk-count{font-size:13px;font-weight:600;padding:0 .4rem;white-space:nowrap}
+.bulk-btn{
+  padding:.3rem .8rem;border-radius:99px;border:none;font-size:12px;font-weight:600;
+  cursor:pointer;transition:opacity .15s
+}
+.bulk-btn:hover{opacity:.82}
+.bulk-start  {background:#22c55e;color:#fff}
+.bulk-stop   {background:#ef4444;color:#fff}
+.bulk-restart{background:#f59e0b;color:#000}
+.bulk-desel  {background:rgba(255,255,255,.07);color:var(--text-dim);border:1px solid var(--border)}
+
+/* Server card checkbox */
+.sc-check{
+  width:16px;height:16px;accent-color:#4f8ef7;cursor:pointer;flex-shrink:0;margin-top:1px
+}
+.server-card.selected{border-color:#4f8ef7;background:rgba(79,142,247,.05)}
 {% endblock %}
 
 {% block content %}
-<div class="page-header">
-  <h1>Dashboard</h1>
+<div class="page-header" style="display:flex;align-items:center;gap:1rem;margin-bottom:1.5rem">
+  <h1 style="font-size:22px;font-weight:600">Dashboard</h1>
+  {% if user.is_staff %}
+  <div style="margin-left:auto;display:flex;gap:.5rem;flex-wrap:wrap">
+    <a href="/servers/new/" style="background:var(--accent);color:#fff;padding:.35rem .85rem;border-radius:var(--radius);font-size:12px;font-weight:600;text-decoration:none">+ Server</a>
+    <a href="/servers/import/" style="background:rgba(255,255,255,.07);color:var(--text-dim);border:1px solid var(--border);padding:.35rem .85rem;border-radius:var(--radius);font-size:12px;font-weight:500;text-decoration:none">⬆ Import</a>
+  </div>
+  {% endif %}
 </div>
 
 <!-- System stats bar -->
@@ -127,9 +160,13 @@
 {% if servers %}
 <div class="server-grid">
   {% for server in servers %}
-  <a class="server-card" href="{% url 'dashboard:server_detail' server.slug %}">
+  <a class="server-card" href="{% url 'dashboard:server_detail' server.slug %}" data-slug="{{ server.slug }}">
     <div class="card-head">
-      <div>
+      {% if user.is_staff %}
+      <input type="checkbox" class="sc-check bulk-cb" data-slug="{{ server.slug }}"
+             onclick="event.preventDefault();event.stopPropagation();toggleSelect(this)">
+      {% endif %}
+      <div style="flex:1">
         <h2>{{ server.name }}</h2>
         <div class="card-meta">{{ server.get_game_type_display }} · {{ server.slug }}</div>
       </div>
@@ -172,6 +209,11 @@
                   border:1px solid var(--border);border-radius:3px">
           ⚙ Config
         </a>
+        <a href="/servers/{{ server.slug }}/export/" onclick="event.stopPropagation()"
+           style="font-size:11px;color:var(--text-dim);text-decoration:none;padding:.2rem .5rem;
+                  border:1px solid var(--border);border-radius:3px">
+          ⬇ Export
+        </a>
       {% endif %}
       <span class="btn-manage">Spravovat →</span>
     </div>
@@ -187,6 +229,18 @@
   {% endif %}
 </div>
 {% endif %}
+
+{% if user.is_staff %}
+<!-- Bulk action bar -->
+<div class="bulk-bar" id="bulk-bar">
+  <span class="bulk-count" id="bulk-count">0 vybráno</span>
+  <button class="bulk-btn bulk-start"   onclick="bulkAction('start')">▶ Start</button>
+  <button class="bulk-btn bulk-stop"    onclick="bulkAction('stop')">■ Stop</button>
+  <button class="bulk-btn bulk-restart" onclick="bulkAction('restart')">↺ Restart</button>
+  <button class="bulk-btn bulk-desel"   onclick="deselectAll()">✕</button>
+</div>
+{% endif %}
+
 {% endblock %}
 
 {% block extra_js %}
@@ -231,6 +285,61 @@ async function loadSysStats(){
 
 loadSysStats();
 setInterval(loadSysStats, 15000);
+
+// ── Bulk selection ──────────────────────────────────────
+const CSRF = "{{ csrf_token }}";
+
+function toggleSelect(cb){
+  const card = cb.closest(".server-card");
+  cb.checked = !cb.checked;
+  card.classList.toggle("selected", cb.checked);
+  updateBulkBar();
+}
+
+function getSelected(){
+  return [...document.querySelectorAll(".bulk-cb:checked")].map(cb=>cb.dataset.slug);
+}
+
+function updateBulkBar(){
+  const sel  = getSelected();
+  const bar  = document.getElementById("bulk-bar");
+  const cnt  = document.getElementById("bulk-count");
+  if(bar){
+    bar.classList.toggle("visible", sel.length > 0);
+    cnt.textContent = sel.length + " vybráno";
+  }
+}
+
+function deselectAll(){
+  document.querySelectorAll(".bulk-cb").forEach(cb=>{
+    cb.checked=false;
+    cb.closest(".server-card").classList.remove("selected");
+  });
+  updateBulkBar();
+}
+
+async function bulkAction(action){
+  const slugs = getSelected();
+  if(!slugs.length) return;
+  const labels={"start":"Start","stop":"Stop","restart":"Restart"};
+  if(!confirm(`${labels[action]} pro ${slugs.length} server(ů)?`)) return;
+
+  const r = await fetch("/servers/bulk/",{
+    method:"POST",
+    headers:{"X-CSRFToken":CSRF,"Content-Type":"application/json"},
+    body: JSON.stringify({action, slugs}),
+  });
+  const d = await r.json();
+  const ok = d.results ? d.results.filter(x=>x.ok).length : 0;
+  const fail = d.results ? d.results.filter(x=>!x.ok) : [];
+
+  let msg = d.message || `${ok}/${slugs.length} úspěšně.`;
+  if(fail.length){
+    msg += "\nChyby:\n" + fail.map(x=>`${x.slug}: ${x.message}`).join("\n");
+  }
+  alert(msg);
+  deselectAll();
+}
 </script>
 {% endif %}
 {% endblock %}

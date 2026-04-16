@@ -145,3 +145,65 @@ class SendCommandView(ServerActionBase):
             return JsonResponse({"ok": False, "message": "Neplatné tělo požadavku."}, status=400)
         result = send_console_command(server, command, user=request.user)
         return self.json_ok(result)
+
+
+@method_decorator(require_POST, name="dispatch")
+class BulkActionView(LoginRequiredMixin, View):
+    """
+    POST /servers/bulk/
+    Body JSON: {"action": "start|stop|restart", "slugs": ["slug1", "slug2"]}
+    Vrátí per-server výsledky.
+    """
+    raise_exception = True
+
+    def post(self, request):
+        if not request.user.is_staff:
+            return JsonResponse({"ok": False, "message": "Vyžaduje admin oprávnění."}, status=403)
+
+        try:
+            body   = json.loads(request.body)
+            action = body.get("action", "").strip()
+            slugs  = body.get("slugs", [])
+        except (json.JSONDecodeError, AttributeError):
+            return JsonResponse({"ok": False, "message": "Neplatné tělo požadavku."}, status=400)
+
+        ALLOWED = {"start", "stop", "restart"}
+        if action not in ALLOWED:
+            return JsonResponse({"ok": False, "message": f"Neznámá akce: {action}"}, status=400)
+
+        if not slugs:
+            return JsonResponse({"ok": False, "message": "Žádné servery nevybrány."}, status=400)
+
+        results = []
+        for slug in slugs[:20]:   # max 20 najednou
+            try:
+                server = Server.objects.get(slug=slug, is_active=True)
+            except Server.DoesNotExist:
+                results.append({"slug": slug, "ok": False, "message": "Server nenalezen."})
+                continue
+
+            from apps.users.permissions import can_view_server
+            if not can_view_server(request.user, server):
+                results.append({"slug": slug, "ok": False, "message": "Přístup odepřen."})
+                continue
+
+            try:
+                if action == "start":
+                    r = start_server(server, user=request.user)
+                elif action == "stop":
+                    r = stop_server(server, user=request.user)
+                else:
+                    r = restart_server(server, user=request.user)
+                results.append({"slug": slug, "ok": r.get("ok", True), "message": r.get("message", "")})
+            except ServerLockError as e:
+                results.append({"slug": slug, "ok": False, "message": str(e)})
+            except Exception as e:
+                logger.exception("Bulk action %s selhal pro %s", action, slug)
+                results.append({"slug": slug, "ok": False, "message": "Interní chyba."})
+
+        all_ok = all(r["ok"] for r in results)
+        return JsonResponse({
+            "ok":      all_ok,
+            "results": results,
+            "message": f"{sum(1 for r in results if r['ok'])}/{len(results)} serverů úspěšně.",
+        })

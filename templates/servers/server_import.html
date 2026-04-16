@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}Import serveru – GamePanel{% endblock %}
+
+{% block extra_css %}
+.page-header{display:flex;align-items:center;gap:.75rem;margin-bottom:1.25rem}
+.page-header h1{font-size:20px;font-weight:600}
+.back{color:var(--text-dim);font-size:13px}
+
+.form-wrap{max-width:560px}
+.card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:1.5rem}
+.section-title{font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;
+               color:var(--text-dim);margin-bottom:.75rem;padding-bottom:.4rem;border-bottom:1px solid var(--border)}
+.field-group{display:flex;flex-direction:column;gap:.3rem;margin-bottom:.85rem}
+label{font-size:12px;color:var(--text-dim)}
+.field-input{background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);
+             color:var(--text);padding:.45rem .7rem;font-size:13px;width:100%}
+.field-error{font-size:11px;color:var(--red);margin-top:.15rem}
+.field-help{font-size:11px;color:var(--text-dim);margin-top:.15rem}
+.btn{padding:.45rem 1rem;border-radius:var(--radius);border:none;font-size:13px;font-weight:600;cursor:pointer;text-decoration:none}
+.btn-primary{background:var(--accent);color:#fff}
+.btn-primary:hover{opacity:.85}
+.btn-ghost{background:transparent;color:var(--text-dim);border:1px solid var(--border)}
+.btn-ghost:hover{background:rgba(255,255,255,.05);text-decoration:none;color:var(--text)}
+.alert-error{background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);border-radius:var(--radius);
+             padding:.75rem 1rem;margin-bottom:1rem;font-size:13px;color:#f87171}
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <a class="back" href="/">← Dashboard</a>
+  <h1>Import konfigurace serveru</h1>
+</div>
+
+{% if errors %}
+<div class="alert-error">
+  {% for err in errors %}
+    <div>✕ {{ err }}</div>
+  {% endfor %}
+</div>
+{% endif %}
+
+<div class="form-wrap">
+  <div class="card">
+    <div class="section-title">Nahrát JSON konfiguraci</div>
+    <form method="post" enctype="multipart/form-data">
+      {% csrf_token %}
+      <div class="field-group">
+        <label>JSON soubor (.json)</label>
+        <input type="file" name="config_file" accept=".json,application/json" class="field-input">
+        <div class="field-help">
+          Nahrej soubor exportovaný přes tlačítko "⬇ Export" na dashboardu.
+          Server bude vytvořen s novým ID — slug musí být unikátní.
+        </div>
+      </div>
+      <div style="display:flex;gap:.5rem;margin-top:1rem">
+        <button type="submit" class="btn btn-primary">⬆ Importovat</button>
+        <a class="btn btn-ghost" href="/">Zrušit</a>
+      </div>
+    </form>
+  </div>
+
+  <div style="margin-top:1rem;font-size:12px;color:var(--text-dim);line-height:1.7">
+    <strong>Co se importuje:</strong>
+    základní konfigurace, RCON, webhook, backup nastavení a start profily.<br>
+    <strong>Co se neimportuje:</strong>
+    metriky, konzole logy, audit eventy, alert pravidla, plánované restarty.
+  </div>
+</div>
+{% endblock %}

@@ -1,5 +1,5 @@
 """
-apps/servers/views.py  (fáze 4 + fáze 5)
+apps/servers/views.py  (fáze 4 + fáze 5 + fáze 9)
 
 Server management views:
   - server_create      GET/POST  /servers/new/
@@ -12,14 +12,21 @@ Server management views:
   - profile_edit       GET/POST  /servers/<slug>/profiles/<pk>/edit/
   - profile_delete     POST      /servers/<slug>/profiles/<pk>/delete/
   - profile_activate   POST      /servers/<slug>/profiles/<pk>/activate/
+  - schedule_list      GET       /servers/<slug>/schedule/
+  - schedule_create    GET/POST  /servers/<slug>/schedule/new/
+  - schedule_edit      GET/POST  /servers/<slug>/schedule/<pk>/edit/
+  - schedule_delete    POST      /servers/<slug>/schedule/<pk>/delete/
+  - server_export      GET       /servers/<slug>/export/  (JSON download)
+  - server_import      GET/POST  /servers/import/         (JSON upload)
 """
+import json
 import logging
 from pathlib import Path
 
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib.auth.decorators import login_required
 from django.contrib import messages
-from django.http import HttpResponseForbidden
+from django.http import HttpResponseForbidden, JsonResponse, HttpResponse
 from django.views.decorators.http import require_POST
 
 from apps.users.permissions import can_edit_server_config, is_admin_or_above
@@ -432,3 +439,111 @@ def schedule_delete(request, slug, pk):
     schedule.delete()
     messages.success(request, f"Plán '{label}' byl smazán.")
     return redirect(f"/servers/{slug}/schedule/")
+
+
+# ── Export / Import ───────────────────────────────────────────────────────────
+
+_EXPORT_FIELDS = [
+    "name", "slug", "game_type", "is_active",
+    "working_directory", "start_command", "stop_command",
+    "tmux_session_name", "log_file_path", "pid_file_path", "host_label",
+    "rcon_enabled", "rcon_host", "rcon_port",
+    "expected_startup_seconds", "expected_shutdown_seconds",
+    "webhook_url", "webhook_on_crash", "webhook_on_start", "webhook_on_stop",
+    "backup_directory", "backup_max_age_hours",
+]
+
+
+@login_required
+def server_export(request, slug):
+    """Stáhne konfiguraci serveru jako JSON soubor."""
+    server = get_object_or_404(Server, slug=slug)
+    denied = _require_edit(request, server)
+    if denied:
+        return denied
+
+    data = {field: getattr(server, field) for field in _EXPORT_FIELDS}
+    data["_export_version"] = 1
+
+    # Exportuj i start profily
+    data["start_profiles"] = [
+        {
+            "name":        p.name,
+            "is_active":   p.is_active,
+            "jar_file":    p.jar_file,
+            "heap_min_mb": p.heap_min_mb,
+            "heap_max_mb": p.heap_max_mb,
+            "jvm_flags":   p.jvm_flags,
+            "extra_args":  p.extra_args,
+        }
+        for p in server.start_profiles.all()
+    ]
+
+    content  = json.dumps(data, indent=2, ensure_ascii=False)
+    response = HttpResponse(content, content_type="application/json; charset=utf-8")
+    response["Content-Disposition"] = f'attachment; filename="{server.slug}-config.json"'
+    return response
+
+
+@login_required
+def server_import(request):
+    """Import konfigurace serveru z JSON souboru."""
+    if not is_admin_or_above(request.user):
+        return HttpResponseForbidden("Nedostatečná oprávnění.")
+
+    errors = []
+
+    if request.method == "POST":
+        uploaded = request.FILES.get("config_file")
+        if not uploaded:
+            errors.append("Soubor nebyl nahrán.")
+        else:
+            try:
+                raw  = uploaded.read().decode("utf-8")
+                data = json.loads(raw)
+            except (UnicodeDecodeError, json.JSONDecodeError) as e:
+                errors.append(f"Neplatný JSON soubor: {e}")
+                data = None
+
+            if data and not errors:
+                # Zkontroluj povinná pole
+                required = ["name", "slug", "game_type", "working_directory",
+                            "start_command", "tmux_session_name", "log_file_path"]
+                for field in required:
+                    if not data.get(field):
+                        errors.append(f"Chybí povinné pole: {field}")
+
+                # Kontrola duplicitního slugu
+                new_slug = data.get("slug", "")
+                if not errors and Server.objects.filter(slug=new_slug).exists():
+                    errors.append(f"Server se slugem '{new_slug}' již existuje. Přejmenuj slug v JSON souboru.")
+
+                if not errors:
+                    # Vytvoř server
+                    server_data = {
+                        field: data[field]
+                        for field in _EXPORT_FIELDS
+                        if field in data
+                    }
+                    server_data.pop("_export_version", None)
+                    server = Server.objects.create(**server_data)
+
+                    # Import start profilů
+                    profiles = data.get("start_profiles", [])
+                    from .models import StartProfile
+                    for p in profiles:
+                        StartProfile.objects.create(
+                            server=server,
+                            name=p.get("name", "Importovaný profil"),
+                            is_active=p.get("is_active", False),
+                            jar_file=p.get("jar_file", "server.jar"),
+                            heap_min_mb=p.get("heap_min_mb", 512),
+                            heap_max_mb=p.get("heap_max_mb", 2048),
+                            jvm_flags=p.get("jvm_flags", ""),
+                            extra_args=p.get("extra_args", ""),
+                        )
+
+                    messages.success(request, f"Server '{server.name}' byl importován.")
+                    return redirect(f"/servers/{server.slug}/edit/")
+
+    return render(request, "servers/server_import.html", {"errors": errors})
