@@ -91,6 +91,38 @@ def backup_status_api(request, slug):
 
 
 @login_required
+def backup_create_api(request, slug):
+    """POST – spustí zálohu serveru v pozadí."""
+    from django.views.decorators.http import require_POST
+    if request.method != "POST":
+        return JsonResponse({"ok": False, "message": "Pouze POST."}, status=405)
+
+    server = get_object_or_404(Server, slug=slug, is_active=True)
+    if not request.user.is_staff:
+        raise PermissionDenied
+
+    import threading
+    from apps.servers.backup_engine import create_backup
+
+    def _run():
+        create_backup(server)
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    return JsonResponse({"ok": True, "message": "Záloha spuštěna na pozadí."})
+
+
+@login_required
+def backup_list_api(request, slug):
+    """Vrátí seznam záloh serveru."""
+    server = get_object_or_404(Server, slug=slug, is_active=True)
+    if not can_view_server(request.user, server):
+        raise PermissionDenied
+    from apps.servers.backup_engine import list_backups
+    return JsonResponse({"backups": list_backups(server)})
+
+
+@login_required
 def log_download(request, slug):
     """Stáhne posledních 5000 řádků log souboru serveru."""
     import os

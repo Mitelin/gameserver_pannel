@@ -1,6 +1,7 @@
 # apps/control/urls.py
 from django.urls import path
 from . import views
+from . import mcadmin_views
 from apps.users.views import server_access
 from apps.servers import views as server_views
 
@@ -38,6 +39,13 @@ urlpatterns = [
     path("<slug:slug>/profiles/<int:pk>/edit/",        server_views.profile_edit,     name="profile_edit"),
     path("<slug:slug>/profiles/<int:pk>/delete/",      server_views.profile_delete,   name="profile_delete"),
     path("<slug:slug>/profiles/<int:pk>/activate/",    server_views.profile_activate, name="profile_activate"),
+
+    # Minecraft admin (whitelist / ban)
+    path("<slug:slug>/mcadmin/",                  mcadmin_views.mcadmin_view,         name="mcadmin"),
+    path("<slug:slug>/mcadmin/whitelist/add/",    mcadmin_views.whitelist_add_view,   name="whitelist_add"),
+    path("<slug:slug>/mcadmin/whitelist/remove/", mcadmin_views.whitelist_remove_view, name="whitelist_remove"),
+    path("<slug:slug>/mcadmin/ban/add/",          mcadmin_views.ban_add_view,         name="ban_add"),
+    path("<slug:slug>/mcadmin/ban/remove/",       mcadmin_views.ban_remove_view,      name="ban_remove"),
 
     # Plánované restarty (fáze 7)
     path("<slug:slug>/schedule/",                      server_views.schedule_list,    name="schedule_list"),

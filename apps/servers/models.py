@@ -70,9 +70,10 @@ class Server(models.Model):
     webhook_on_start          = models.BooleanField(default=False)
     webhook_on_stop           = models.BooleanField(default=False)
 
-    # Backup monitoring (fáze 5)
+    # Backup (fáze 5 + 11)
     backup_directory          = models.CharField(max_length=512, blank=True)
     backup_max_age_hours      = models.IntegerField(default=24)
+    backup_keep_count         = models.IntegerField(default=7, help_text="Počet záloh k uchování (rotace)")
 
     class Meta:
         ordering = ["name"]

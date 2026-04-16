@@ -27,6 +27,7 @@ urlpatterns = [
     path("servers/",  include("apps.metrics.urls")),
     path("servers/",  include("apps.audit.urls")),
     path("servers/",  include("apps.alerts.urls")),
+    path("servers/",  include("apps.filemanager.urls")),
     path("health/",   include("apps.common.urls")),
 ]
 

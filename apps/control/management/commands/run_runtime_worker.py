@@ -416,19 +416,27 @@ def _watchdog_loop(stop_event: threading.Event):
 
 
 def _check_backup(server):
-    """Zkontroluje stáří backupů a zaloguje audit event pokud jsou staré."""
+    """Zkontroluje stáří backupů, pokud jsou staré – spustí novou zálohu."""
     from apps.servers.backup import check_backup_status
+    from apps.servers.backup_engine import create_backup
     from apps.audit.models import AuditEvent
+
     result = check_backup_status(server)
     if result.get("ok") is False:
-        AuditEvent.objects.create(
-            server=server,
-            event_type="server.backup.stale",
-            severity="warning",
-            message=result.get("message", "Backup je starý nebo chybí."),
-            payload_json=result,
-        )
-        logger.warning("[%s] Backup problém: %s", server.slug, result.get("message"))
+        logger.warning("[%s] Backup problém: %s – spouštím zálohu", server.slug, result.get("message"))
+        backup_result = create_backup(server)
+        if not backup_result.get("ok"):
+            AuditEvent.objects.create(
+                server=server,
+                event_type="server.backup.stale",
+                severity="warning",
+                message=result.get("message", "Backup je starý nebo chybí."),
+                payload_json={**result, "auto_backup": backup_result},
+            )
+    elif result.get("ok") is None:
+        pass  # Backup adresář není nastaven – ignoruj
+    else:
+        logger.debug("[%s] Backup OK: %s", server.slug, result.get("message"))
 
 
 def _watchdog_check(server, backend, channel_layer):

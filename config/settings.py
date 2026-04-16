@@ -41,6 +41,7 @@ INSTALLED_APPS = [
     "apps.alerts",
     "apps.dashboard",
     "apps.common",
+    "apps.filemanager",
 ]
 
 MIDDLEWARE = [

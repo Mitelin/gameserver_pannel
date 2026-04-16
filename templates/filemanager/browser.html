@@ -1,0 +1,208 @@
+{% extends "base.html" %}
+{% block title %}Soubory – {{ server.name }}{% endblock %}
+
+{% block extra_css %}
+.page-header{display:flex;align-items:center;gap:.75rem;margin-bottom:1rem;flex-wrap:wrap}
+.page-header h1{font-size:20px;font-weight:600}
+.back{color:var(--text-dim);font-size:13px;text-decoration:none}
+.back:hover{color:var(--text)}
+
+.breadcrumb{display:flex;align-items:center;gap:.3rem;font-size:12px;color:var(--text-dim);
+            margin-bottom:.75rem;flex-wrap:wrap}
+.breadcrumb a{color:var(--accent);text-decoration:none}
+.breadcrumb a:hover{text-decoration:underline}
+.breadcrumb .sep{color:var(--border)}
+
+.toolbar{display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:.75rem;align-items:center}
+.btn{padding:.3rem .8rem;border-radius:var(--radius);border:none;font-size:12px;font-weight:500;
+     cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;gap:.3rem;transition:opacity .15s}
+.btn:hover{opacity:.82;text-decoration:none}
+.btn-primary{background:var(--accent);color:#fff}
+.btn-sm{background:rgba(255,255,255,.06);color:var(--text-dim);border:1px solid var(--border)}
+.btn-sm:hover{background:rgba(255,255,255,.1);color:var(--text)}
+.btn-danger{background:rgba(239,68,68,.15);color:#ef4444;border:1px solid rgba(239,68,68,.3)}
+
+.file-table{width:100%;border-collapse:collapse;font-size:13px}
+.file-table th{text-align:left;font-size:10px;font-weight:600;letter-spacing:.08em;
+               text-transform:uppercase;color:var(--text-dim);padding:.4rem .75rem;
+               border-bottom:1px solid var(--border);background:var(--bg2)}
+.file-table td{padding:.5rem .75rem;border-bottom:1px solid rgba(46,51,71,.4);vertical-align:middle}
+.file-table tr:hover td{background:rgba(255,255,255,.02)}
+.file-table tr:last-child td{border-bottom:none}
+.file-icon{font-size:15px;width:20px;display:inline-block}
+.file-name a{color:var(--text);text-decoration:none;font-weight:500}
+.file-name a:hover{color:var(--accent)}
+.file-size{color:var(--text-dim);font-variant-numeric:tabular-nums;font-family:var(--font-mono);font-size:11px}
+.file-actions{display:flex;gap:.3rem;justify-content:flex-end}
+
+.card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
+
+/* Upload drop zone */
+.drop-zone{border:2px dashed var(--border);border-radius:var(--radius);padding:1.5rem;
+           text-align:center;color:var(--text-dim);font-size:13px;transition:all .2s;cursor:pointer}
+.drop-zone.over{border-color:var(--accent);background:rgba(79,142,247,.05);color:var(--accent)}
+.drop-zone input{display:none}
+
+#toast{position:fixed;bottom:1.5rem;right:1.5rem;background:var(--bg2);border:1px solid var(--border);
+       border-radius:var(--radius);padding:.55rem 1rem;font-size:13px;z-index:999;
+       display:none;animation:slide-in .2s}
+#toast.ok {border-color:rgba(34,197,94,.4);color:#4ade80;background:#0d1a11}
+#toast.err{border-color:rgba(239,68,68,.4);color:#f87171;background:#1a0e0e}
+@keyframes slide-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <a class="back" href="/servers/{{ server.slug }}/">← {{ server.name }}</a>
+  <h1>📁 Soubory</h1>
+  <span style="font-size:11px;color:var(--text-dim);font-family:var(--font-mono);margin-left:.5rem">{{ root }}</span>
+</div>
+
+<!-- Breadcrumb -->
+<div class="breadcrumb">
+  <a href="?path=">🏠 root</a>
+  {% for crumb in breadcrumbs %}
+    <span class="sep">/</span>
+    <a href="?path={{ crumb.rel }}">{{ crumb.name }}</a>
+  {% endfor %}
+</div>
+
+<!-- Toolbar -->
+<div class="toolbar">
+  {% if current_rel %}
+  <a class="btn btn-sm" href="?path={{ parent_rel }}">⬆ Nahoru</a>
+  {% endif %}
+  <button class="btn btn-sm" onclick="document.getElementById('mkdir-form').style.display='flex'">📁 Nový adresář</button>
+  <label class="btn btn-primary" style="cursor:pointer">
+    ⬆ Nahrát soubor
+    <input type="file" id="upload-input" style="display:none" multiple onchange="uploadFiles(this.files)">
+  </label>
+  <span id="upload-progress" style="font-size:12px;color:var(--text-dim)"></span>
+</div>
+
+<!-- Nový adresář inline form -->
+<div id="mkdir-form" style="display:none;align-items:center;gap:.5rem;margin-bottom:.75rem">
+  <input type="text" id="mkdir-name" placeholder="název adresáře"
+         style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);
+                padding:.35rem .65rem;font-size:13px;color:var(--text);outline:none;width:200px"
+         onkeydown="if(event.key==='Enter')mkdirSubmit()">
+  <button class="btn btn-primary" onclick="mkdirSubmit()">Vytvořit</button>
+  <button class="btn btn-sm" onclick="document.getElementById('mkdir-form').style.display='none'">Zrušit</button>
+</div>
+
+<!-- File table -->
+<div class="card">
+  {% if entries %}
+  <table class="file-table">
+    <thead>
+      <tr>
+        <th style="width:28px"></th>
+        <th>Název</th>
+        <th>Velikost</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for entry in entries %}
+      <tr>
+        <td><span class="file-icon">{% if entry.is_dir %}📁{% elif entry.editable %}📄{% else %}📦{% endif %}</span></td>
+        <td class="file-name">
+          {% if entry.is_dir %}
+            <a href="?path={{ entry.rel }}">{{ entry.name }}/</a>
+          {% elif entry.editable %}
+            <a href="view/?path={{ entry.rel }}">{{ entry.name }}</a>
+          {% else %}
+            <span style="color:var(--text-dim)">{{ entry.name }}</span>
+          {% endif %}
+        </td>
+        <td class="file-size">
+          {% if not entry.is_dir %}{{ entry.size|filesizeformat }}{% endif %}
+        </td>
+        <td>
+          <div class="file-actions">
+            {% if not entry.is_dir %}
+            <a class="btn btn-sm" href="download/?path={{ entry.rel }}">⬇</a>
+            {% if entry.editable %}
+            <a class="btn btn-sm" href="view/?path={{ entry.rel }}">✏</a>
+            {% endif %}
+            <button class="btn btn-danger" onclick="deleteFile('{{ entry.rel }}','{{ entry.name }}')">✕</button>
+            {% endif %}
+          </div>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div style="text-align:center;padding:2rem;color:var(--text-dim);font-size:13px">Prázdný adresář.</div>
+  {% endif %}
+</div>
+
+<!-- Drop zone -->
+<div class="drop-zone" id="drop-zone" style="margin-top:.75rem"
+     ondragover="event.preventDefault();this.classList.add('over')"
+     ondragleave="this.classList.remove('over')"
+     ondrop="event.preventDefault();this.classList.remove('over');uploadFiles(event.dataTransfer.files)">
+  Přetáhni soubory sem pro nahrání
+</div>
+
+<div id="toast"></div>
+
+<script>
+const CSRF    = "{{ csrf_token }}";
+const SLUG    = "{{ server.slug }}";
+const CUR_REL = "{{ current_rel }}";
+
+function toast(msg, ok=true){
+  const t = document.getElementById("toast");
+  t.textContent = msg; t.className = ok ? "ok" : "err";
+  t.style.display = "block";
+  clearTimeout(t._tid);
+  t._tid = setTimeout(()=>{ t.style.display="none"; }, 3500);
+}
+
+async function deleteFile(rel, name){
+  if(!confirm(`Smazat '${name}'?`)) return;
+  const r = await fetch(`/servers/${SLUG}/files/delete/`, {
+    method: "POST",
+    headers: {"X-CSRFToken": CSRF, "Content-Type": "application/x-www-form-urlencoded"},
+    body: "path=" + encodeURIComponent(rel),
+  });
+  const d = await r.json();
+  toast(d.message, d.ok);
+  if(d.ok) setTimeout(()=>location.reload(), 800);
+}
+
+async function uploadFiles(files){
+  const prog = document.getElementById("upload-progress");
+  let done = 0;
+  for(const file of files){
+    prog.textContent = `Nahrávám ${file.name}…`;
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("path", CUR_REL);
+    const r = await fetch(`/servers/${SLUG}/files/upload/`, {
+      method: "POST", headers: {"X-CSRFToken": CSRF}, body: fd,
+    });
+    const d = await r.json();
+    toast(d.message, d.ok);
+    if(d.ok) done++;
+  }
+  prog.textContent = "";
+  if(done > 0) setTimeout(()=>location.reload(), 900);
+}
+
+async function mkdirSubmit(){
+  const name = document.getElementById("mkdir-name").value.trim();
+  if(!name) return;
+  const r = await fetch(`/servers/${SLUG}/files/mkdir/`, {
+    method: "POST",
+    headers: {"X-CSRFToken": CSRF, "Content-Type": "application/x-www-form-urlencoded"},
+    body: `path=${encodeURIComponent(CUR_REL)}&name=${encodeURIComponent(name)}`,
+  });
+  const d = await r.json();
+  toast(d.message, d.ok);
+  if(d.ok) setTimeout(()=>location.reload(), 800);
+}
+</script>
+{% endblock %}

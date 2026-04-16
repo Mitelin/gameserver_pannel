@@ -138,11 +138,15 @@
   <a class="ql" href="{% url 'alerts:rule_list' server.slug %}">🔔 Alerty</a>
   <a class="ql" href="{% url 'control:server_history' server.slug %}">🕓 Historie změn</a>
   <a class="ql" href="{% url 'control:schedule_list' server.slug %}">⏰ Restarty</a>
+  <a class="ql" href="{% url 'filemanager:browser' server.slug %}">📁 Soubory</a>
   {% if server.game_type == 'minecraft_java' or server.game_type == 'minecraft_bedrock' %}
   <a class="ql" href="{% url 'control:profile_list' server.slug %}">▶ Start profily</a>
   {% endif %}
   {% if server.game_type == 'minecraft_java' %}
   <a class="ql" href="{% url 'control:properties' server.slug %}">📄 server.properties</a>
+  {% endif %}
+  {% if server.game_type == 'minecraft_java' or server.game_type == 'minecraft_bedrock' %}
+  <a class="ql" href="{% url 'control:mcadmin' server.slug %}">⚔ Whitelist / Bany</a>
   {% endif %}
   {% endif %}
 </div>
