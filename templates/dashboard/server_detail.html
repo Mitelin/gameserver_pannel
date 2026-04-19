@@ -552,12 +552,38 @@ function toast(msg, ok=true){
 function esc(s){ return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
 
 // ══════════════════════════════════════════════════════════
+// Log polling – záloha za WebSocket (funguje bez runtime workeru)
+// ══════════════════════════════════════════════════════════
+let _pollLines = new Set();   // deduplikace řádků
+let _pollTimer = null;
+
+async function pollLog(){
+  try {
+    const r = await fetch(`/servers/${SLUG}/console/logtail/?lines=200`);
+    const d = await r.json();
+    if(!d.ok || !d.lines) return;
+    let added = 0;
+    for(const line of d.lines){
+      if(!_pollLines.has(line)){
+        _pollLines.add(line);
+        appendLine(line, true);
+        added++;
+      }
+    }
+    // Udržuj Set malý
+    if(_pollLines.size > 2000) _pollLines = new Set([...d.lines]);
+  } catch(e){ /* ignore */ }
+  _pollTimer = setTimeout(pollLog, 3000);
+}
+
+// ══════════════════════════════════════════════════════════
 // Init
 // ══════════════════════════════════════════════════════════
 setStatus("{{ server.status }}");
 initCharts();
 loadCharts("24h");
 wsConnect();
+pollLog();   // start log polling hned
 consoleOut.scrollTop = consoleOut.scrollHeight;
 </script>
 {% endblock %}

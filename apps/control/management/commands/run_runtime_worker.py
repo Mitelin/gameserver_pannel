@@ -69,11 +69,18 @@ class _LogTailer:
         self._fh    = None
         self._inode = None
 
+    TAIL_BYTES = 32 * 1024  # při prvním otevření přečti posledních 32 KB
+
     def open(self):
         try:
             self._fh    = open(self.path, "r", encoding="utf-8", errors="replace")
             self._inode = os.fstat(self._fh.fileno()).st_ino
-            self._fh.seek(0, 2)
+            size = os.fstat(self._fh.fileno()).st_size
+            if size > self.TAIL_BYTES:
+                self._fh.seek(size - self.TAIL_BYTES)
+                self._fh.readline()  # přeskočí neúplný první řádek
+            else:
+                self._fh.seek(0)
             return True
         except OSError:
             self._fh = self._inode = None

@@ -207,3 +207,41 @@ class BulkActionView(LoginRequiredMixin, View):
             "results": results,
             "message": f"{sum(1 for r in results if r['ok'])}/{len(results)} serverů úspěšně.",
         })
+
+
+class LogTailView(LoginRequiredMixin, View):
+    """
+    GET /servers/<slug>/console/logtail/?lines=200
+    Vrátí posledních N řádků z log souboru serveru jako JSON.
+    Funguje bez runtime workeru – čte soubor přímo.
+    """
+    raise_exception = True
+    MAX_LINES = 500
+
+    def get(self, request, slug):
+        from apps.users.permissions import can_view_server
+        server = get_object_or_404(Server, slug=slug, is_active=True)
+        if not can_view_server(request.user, server):
+            return JsonResponse({"ok": False, "lines": []}, status=403)
+
+        n = min(int(request.GET.get("lines", 200)), self.MAX_LINES)
+        log_path = server.log_file_path.strip() if server.log_file_path else ""
+        if not log_path:
+            return JsonResponse({"ok": True, "lines": [], "info": "log_file_path není nastaven"})
+
+        try:
+            import os, collections
+            size = os.path.getsize(log_path)
+            buf  = collections.deque(maxlen=n)
+            with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+                if size > 128 * 1024:
+                    f.seek(max(0, size - 128 * 1024))
+                    f.readline()  # přeskočí neúplný první řádek
+                for line in f:
+                    buf.append(line.rstrip("\r\n"))
+            return JsonResponse({"ok": True, "lines": list(buf)})
+        except FileNotFoundError:
+            return JsonResponse({"ok": True, "lines": [], "info": "Log soubor zatím neexistuje"})
+        except Exception as e:
+            logger.warning("LogTailView %s: %s", slug, e)
+            return JsonResponse({"ok": False, "lines": [], "info": str(e)})
