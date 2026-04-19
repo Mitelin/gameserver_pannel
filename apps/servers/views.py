@@ -341,7 +341,20 @@ def profile_activate(request, slug, pk):
     if denied:
         return denied
     profile.activate()
-    messages.success(request, f"Profil '{profile.name}' je aktivni. Start prikaz byl aktualizovan.")
+    messages.success(request, f"Profil '{profile.name}' je aktivní – použije se při příštím startu.")
+    return redirect(f"/servers/{slug}/profiles/")
+
+
+@login_required
+@require_POST
+def profile_deactivate(request, slug):
+    """Deaktivuje všechny profily – server použije manuální start command."""
+    server = get_object_or_404(Server, slug=slug)
+    denied = _require_edit(request, server)
+    if denied:
+        return denied
+    StartProfile.objects.filter(server=server, is_active=True).update(is_active=False)
+    messages.success(request, "Profil deaktivován – bude použit manuální start command.")
     return redirect(f"/servers/{slug}/profiles/")
 
 

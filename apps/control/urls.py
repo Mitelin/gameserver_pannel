@@ -38,7 +38,8 @@ urlpatterns = [
     path("<slug:slug>/profiles/new/",                  server_views.profile_create,   name="profile_create"),
     path("<slug:slug>/profiles/<int:pk>/edit/",        server_views.profile_edit,     name="profile_edit"),
     path("<slug:slug>/profiles/<int:pk>/delete/",      server_views.profile_delete,   name="profile_delete"),
-    path("<slug:slug>/profiles/<int:pk>/activate/",    server_views.profile_activate, name="profile_activate"),
+    path("<slug:slug>/profiles/<int:pk>/activate/",    server_views.profile_activate,   name="profile_activate"),
+    path("<slug:slug>/profiles/deactivate/",           server_views.profile_deactivate, name="profile_deactivate"),
 
     # Minecraft admin (whitelist / ban)
     path("<slug:slug>/mcadmin/",                  mcadmin_views.mcadmin_view,         name="mcadmin"),
