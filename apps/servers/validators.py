@@ -45,9 +45,13 @@ def validate_server_config(server: Server) -> ValidationResult:
     if not server.start_command.strip():
         result.fail("Start command je prázdný.")
 
-    # tmux musí být dostupný
+    # tmux musí být dostupný (na Windows jen varování – produkce běží na Linuxu)
     if not shutil.which("tmux"):
-        result.fail("tmux není dostupný na PATH.")
+        import sys
+        if sys.platform == "win32":
+            result.warn("tmux není dostupný (Windows – v produkci na Linuxu bude OK).")
+        else:
+            result.fail("tmux není dostupný na PATH.")
 
     # Log soubor nemusí existovat před startem, ale adresář musí
     if server.log_file_path:

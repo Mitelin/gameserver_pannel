@@ -413,17 +413,26 @@ function prependEvent(m){
 // ══════════════════════════════════════════════════════════
 // Actions
 // ══════════════════════════════════════════════════════════
+let _actionBusy = false;
 async function doAction(action){
+  if(_actionBusy) return;
+  _actionBusy = true;
+  // Vizuálně zablokuj tlačítka
+  ["btn-start","btn-stop","btn-restart","btn-force"].forEach(id=>{
+    const b=document.getElementById(id); if(b) b.disabled=true;
+  });
   try{
     const r=await fetch(`/servers/${SLUG}/actions/${action}/`,{
       method:"POST",headers:{"X-CSRFToken":CSRF}});
     const d=await r.json();
     toast(d.message, d.ok);
-    // Zobraz každou konkrétní chybu zvlášť
     if(!d.ok && d.errors && d.errors.length){
       d.errors.forEach(e => toast("⚠ "+e, false));
     }
   } catch(e){ toast("Chyba sítě", false); }
+  finally{
+    setTimeout(()=>{ _actionBusy=false; }, 2000);
+  }
 }
 
 // ══════════════════════════════════════════════════════════
