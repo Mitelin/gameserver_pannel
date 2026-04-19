@@ -100,7 +100,7 @@ label { font-size:12px; color:var(--text-dim); }
   {% endif %}
 </div>
 
-<form method="post">
+<form method="post" id="server-form">
   {% csrf_token %}
 
   {# Základní informace #}
@@ -256,17 +256,18 @@ label { font-size:12px; color:var(--text-dim); }
   <div class="actions">
     <button type="submit" class="btn btn-primary">{% if is_create %}Vytvořit server{% else %}Uložit změny{% endif %}</button>
     <a href="/" class="btn btn-ghost">Zpět</a>
-    {% if not is_create %}
-      <form method="post" action="/servers/{{ server.slug }}/delete/" style="margin:0;margin-left:auto">
-        {% csrf_token %}
-        <button type="submit" class="btn btn-danger"
-          onclick="return confirm('Opravdu smazat server {{ server.name }}? Tuto akci nelze vrátit.')">
-          Smazat server
-        </button>
-      </form>
-    {% endif %}
   </div>
 </form>
+
+{% if not is_create %}
+<form method="post" action="/servers/{{ server.slug }}/delete/" style="margin-top:.5rem;display:flex;justify-content:flex-end">
+  {% csrf_token %}
+  <button type="submit" class="btn btn-danger"
+    onclick="return confirm('Opravdu smazat server {{ server.name }}? Tuto akci nelze vrátit.')">
+    Smazat server
+  </button>
+</form>
+{% endif %}
 
 {% if not is_create and is_minecraft and profiles is not None %}
 <div class="card" style="margin-top:1.5rem">
