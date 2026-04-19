@@ -41,7 +41,7 @@ class ServerForm(forms.ModelForm):
         help_texts = {
             "slug":              "URL identifikátor – jen malá písmena, čísla, pomlčky.",
             "tmux_session_name": "Unikátní název tmux session (např. mc-survival).",
-            "start_command":     "Příkaz pro spuštění. Lze přepsat aktivním start profilem.",
+            "start_command":     "Příkaz pro spuštění. Nechte prázdné pro použití start profilu.",
         }
 
 

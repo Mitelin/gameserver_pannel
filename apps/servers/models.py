@@ -37,10 +37,10 @@ class Server(models.Model):
 
     # Procesní konfigurace
     working_directory         = models.CharField(max_length=512)
-    start_command             = models.CharField(max_length=512)
+    start_command             = models.CharField(max_length=512, blank=True, default="")
     stop_command              = models.CharField(max_length=512, blank=True)
     tmux_session_name         = models.CharField(max_length=64, unique=True)
-    log_file_path             = models.CharField(max_length=512)
+    log_file_path             = models.CharField(max_length=512, blank=True, default="")
     pid_file_path             = models.CharField(max_length=512, blank=True)
 
     # Multi-host (budoucí rozšíření)
