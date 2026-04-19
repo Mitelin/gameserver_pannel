@@ -713,6 +713,14 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         self.stdout.write("Runtime worker spouštím...")
 
+        # Počkej dokud není setup wizard dokončen
+        from apps.setup.models import BootstrapState
+        if not BootstrapState.is_done():
+            self.stdout.write("⏳ Setup wizard nebyl dokončen – workři čekají...")
+            while not BootstrapState.is_done():
+                time.sleep(5)
+            self.stdout.write("✅ Setup wizard dokončen – spouštím workry.")
+
         stop_event = threading.Event()
 
         # Signály musí být registrovány v hlavním threadu
