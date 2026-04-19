@@ -17,7 +17,13 @@ SECRET_KEY = os.environ.get("SECRET_KEY", "change-me-in-production")
 DEBUG      = os.environ.get("DEBUG", "false").lower() == "true"
 ALLOWED_HOSTS = os.environ.get("ALLOWED_HOSTS", "localhost 127.0.0.1").split()
 USE_SQLITE = os.environ.get("USE_SQLITE", "false").lower() == "true"
-USE_INMEMORY_CHANNEL_LAYER = os.environ.get("USE_INMEMORY_CHANNEL_LAYER", "false").lower() == "true"
+# InMemory channel layer se použije pokud není REDIS_URL nastavená nebo USE_INMEMORY_CHANNEL_LAYER=true
+# InMemory channel layer se použije pokud není REDIS_URL nastavená nebo USE_INMEMORY_CHANNEL_LAYER=true
+_redis_url = os.environ.get("REDIS_URL", "")
+USE_INMEMORY_CHANNEL_LAYER = (
+    os.environ.get("USE_INMEMORY_CHANNEL_LAYER", "false").lower() == "true"
+    or not _redis_url
+)
 
 INSTALLED_APPS = [
     "django.contrib.admin",
@@ -74,7 +80,10 @@ TEMPLATES = [{
 }]
 
 # ── Databáze ──────────────────────────────────────────────────
-if USE_SQLITE:
+# SQLite se použije pokud: USE_SQLITE=true NEBO není nastavené DB_PASSWORD.
+# PostgreSQL se použije pouze pokud je DB_PASSWORD explicitně nastavené (produkce).
+_db_password = os.environ.get("DB_PASSWORD", "")
+if USE_SQLITE or not _db_password:
     DATABASES = {
         "default": {
             "ENGINE": "django.db.backends.sqlite3",
@@ -87,14 +96,14 @@ else:
             "ENGINE":   "django.db.backends.postgresql",
             "NAME":     os.environ.get("DB_NAME",     "gameserver_panel"),
             "USER":     os.environ.get("DB_USER",     "mcpanel"),
-            "PASSWORD": os.environ.get("DB_PASSWORD", ""),
+            "PASSWORD": _db_password,
             "HOST":     os.environ.get("DB_HOST",     "127.0.0.1"),
             "PORT":     os.environ.get("DB_PORT",     "5432"),
         }
     }
 
 # ── Cache + Redis ─────────────────────────────────────────────
-REDIS_URL = os.environ.get("REDIS_URL", "redis://127.0.0.1:6379/0")
+REDIS_URL = _redis_url or "redis://127.0.0.1:6379/0"
 
 if USE_INMEMORY_CHANNEL_LAYER:
     # Dev mode – žádný Redis, cache v paměti procesu
