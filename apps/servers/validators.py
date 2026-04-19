@@ -40,9 +40,10 @@ def validate_server_config(server: Server) -> ValidationResult:
             f"Pracovní adresář neexistuje: {server.working_directory}"
         )
 
-    # Start command nesmí být prázdný
-    if not server.start_command.strip():
-        result.fail("Start command je prázdný.")
+    # Start command nesmí být prázdný (pokud není aktivní profil)
+    active_profile = server.start_profiles.filter(is_active=True).first()
+    if not active_profile and not server.start_command.strip():
+        result.fail("Start command je prázdný a žádný profil není aktivní. Nastav start command nebo aktivuj profil.")
 
 
     # Log soubor nemusí existovat před startem, ale adresář musí

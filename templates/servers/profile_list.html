@@ -33,27 +33,26 @@
   <a href="/servers/{{ server.slug }}/edit/" class="btn btn-ghost">← Konfigurace</a>
 </div>
 
-{% with active_profile=profiles|dictsort:"is_active"|last %}
+{% if active_profile %}
 <div style="margin-bottom:.75rem;padding:.65rem 1rem;border-radius:var(--radius);font-size:13px;
-  {% if active_profile.is_active %}
-    background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.25);color:var(--green)
-  {% else %}
-    background:rgba(255,255,255,.03);border:1px solid var(--border);color:var(--text-dim)
-  {% endif %}">
-  {% if active_profile.is_active %}
-    ● Při startu se použije profil <strong>{{ active_profile.name }}</strong>
-    &nbsp;—&nbsp;
-    <form method="post" action="/servers/{{ server.slug }}/profiles/deactivate/" style="display:inline;margin:0">
-      {% csrf_token %}
-      <button type="submit" class="btn btn-ghost" style="font-size:11px;padding:.15rem .5rem;color:var(--text-dim)">
-        Vypnout profil (použít manuální start command)
-      </button>
-    </form>
-  {% else %}
-    ○ Žádný profil není aktivní — použije se <strong>manuální start command</strong> z konfigurace serveru.
-  {% endif %}
+            background:rgba(34,197,94,.08);border:1px solid rgba(34,197,94,.25);color:var(--green)">
+  ● Při startu se použije profil <strong>{{ active_profile.name }}</strong>
+  &nbsp;·&nbsp; <code style="font-size:11px;opacity:.8">{{ active_profile.build_command }}</code>
+  &nbsp;—&nbsp;
+  <form method="post" action="/servers/{{ server.slug }}/profiles/deactivate/" style="display:inline;margin:0">
+    {% csrf_token %}
+    <button type="submit" class="btn btn-ghost" style="font-size:11px;padding:.15rem .5rem;color:var(--text-dim)">
+      Deaktivovat — přepnout na manuální start command
+    </button>
+  </form>
 </div>
-{% endwith %}
+{% else %}
+<div style="margin-bottom:.75rem;padding:.65rem 1rem;border-radius:var(--radius);font-size:13px;
+            background:rgba(255,255,255,.03);border:1px solid var(--border);color:var(--text-dim)">
+  ○ Žádný profil není aktivní — použije se <strong>manuální start command</strong> z konfigurace serveru.
+  &nbsp;<a href="/servers/{{ server.slug }}/edit/" style="color:var(--accent)">Upravit v konfiguraci →</a>
+</div>
+{% endif %}
 
 <div class="card">
   {% if profiles %}
