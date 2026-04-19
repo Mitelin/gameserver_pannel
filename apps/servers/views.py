@@ -123,12 +123,15 @@ def server_edit(request, slug):
         # Ulož staré hodnoty pro diff
         old_values = {f: getattr(server, f) for f in _TRACKED_FIELDS if hasattr(server, f)}
         form = ServerForm(request.POST, instance=server)
+        logger.info("[server_edit] POST start_command=%r", request.POST.get("start_command"))
         if form.is_valid():
             form.save()
             new_values = {f: getattr(server, f) for f in _TRACKED_FIELDS if hasattr(server, f)}
             _log_config_changes(server, old_values, new_values, request.user)
             messages.success(request, "Konfigurace serveru byla uložena.")
             return redirect(f"/servers/{server.slug}/edit/")
+        else:
+            logger.warning("[server_edit] Form INVALID: %s", form.errors.as_text())
     else:
         form = ServerForm(instance=server)
 
