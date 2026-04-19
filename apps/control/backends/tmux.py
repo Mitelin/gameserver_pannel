@@ -70,14 +70,17 @@ class LocalTmuxProcessBackend:
         if self.session_exists(server):
             raise TmuxError(f"Session '{server.tmux_session_name}' již existuje.")
 
-        # Použij aktivní profil pokud existuje, jinak server.start_command
-        start_cmd = server.start_command
-        try:
-            profile = server.start_profiles.filter(is_active=True).first()
-            if profile:
-                start_cmd = profile.build_command()
-        except Exception:
-            pass
+        # Priorita: manuální start_command (pokud vyplněný) > aktivní profil
+        if server.start_command.strip():
+            start_cmd = server.start_command.strip()
+        else:
+            start_cmd = server.start_command
+            try:
+                profile = server.start_profiles.filter(is_active=True).first()
+                if profile:
+                    start_cmd = profile.build_command()
+            except Exception:
+                pass
 
         cmd = (
             f"cd {shlex.quote(server.working_directory)} && "

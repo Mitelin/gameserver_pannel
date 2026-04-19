@@ -356,20 +356,8 @@ def profile_deactivate(request, slug):
     denied = _require_edit(request, server)
     if denied:
         return denied
-    # Zjisti příkaz aktivního profilu před deaktivací
-    active = StartProfile.objects.filter(server=server, is_active=True).first()
-    profile_cmd = active.build_command() if active else None
-
     StartProfile.objects.filter(server=server, is_active=True).update(is_active=False)
-
-    # Pokud server.start_command obsahuje příkaz z profilu, vyprázdní ho
-    # aby uživatel byl nucen zadat vlastní manuální příkaz
-    if profile_cmd and server.start_command.strip() == profile_cmd.strip():
-        server.start_command = ""
-        server.save(update_fields=["start_command", "updated_at"])
-        messages.warning(request, "Profil deaktivován. Start command byl vymazán – nastav ho ručně v konfiguraci serveru.")
-    else:
-        messages.success(request, "Profil deaktivován – bude použit manuální start command z konfigurace.")
+    messages.success(request, "Profil deaktivován – bude použit manuální start command z konfigurace.")
     return redirect(f"/servers/{slug}/profiles/")
 
 

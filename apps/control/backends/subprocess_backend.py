@@ -27,14 +27,20 @@ _processes: dict[str, subprocess.Popen] = {}
 
 
 def _resolve_start_command(server: Server) -> str:
-    """Vrátí start command z aktivního profilu, nebo server.start_command jako fallback."""
+    """
+    Priorita:
+    1. server.start_command pokud je vyplněný (admin override)
+    2. aktivní profil (pokud start_command je prázdný)
+    """
+    if server.start_command.strip():
+        return server.start_command.strip()
     try:
         profile = server.start_profiles.filter(is_active=True).first()
         if profile:
             return profile.build_command()
     except Exception:
         pass
-    return server.start_command
+    return ""
 
 
 @dataclass
