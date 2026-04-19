@@ -85,14 +85,21 @@ class SubprocessBackend:
         if not os.path.isdir(workdir):
             raise SubprocessError(f"Pracovní adresář neexistuje: {workdir}")
 
-        # Otevři log soubor pro zápis výstupu
-        stdout = subprocess.DEVNULL
-        if server.log_file_path:
-            try:
-                Path(server.log_file_path).parent.mkdir(parents=True, exist_ok=True)
-                stdout = open(server.log_file_path, "a", encoding="utf-8", errors="replace")
-            except Exception as exc:
-                logger.warning("Nelze otevřít log soubor %s: %s", server.log_file_path, exc)
+        # Urči cestu k log souboru – pokud není nastavena, použij výchozí
+        log_path = server.log_file_path.strip() if server.log_file_path else ""
+        if not log_path:
+            log_path = str(Path(workdir) / "panel_output.log")
+            # Ulož cestu zpět na server aby ji konzole tailer našel
+            server.log_file_path = log_path
+            server.save(update_fields=["log_file_path"])
+            logger.info("log_file_path nebyl nastaven, použiji: %s", log_path)
+
+        try:
+            Path(log_path).parent.mkdir(parents=True, exist_ok=True)
+            stdout = open(log_path, "a", encoding="utf-8", errors="replace")
+        except Exception as exc:
+            logger.warning("Nelze otevřít log soubor %s: %s", log_path, exc)
+            stdout = subprocess.DEVNULL
 
         try:
             if sys.platform == "win32":

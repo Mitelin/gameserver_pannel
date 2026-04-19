@@ -89,13 +89,15 @@ class _LogTailer:
 
     def read_new_lines(self):
         if self._fh is None:
-            self.open()
-            return []
+            if not self.open():
+                return []
         try:
-            if self.path.stat().st_ino != self._inode:
+            stat = self.path.stat()
+            # inode check – na Windows je st_ino vždy 0, přeskočíme
+            if self._inode and stat.st_ino and stat.st_ino != self._inode:
                 logger.info("[%s] Log rotation", self.server.slug)
                 self.close(); self.open(); return []
-            if self.path.stat().st_size < self._fh.tell():
+            if stat.st_size < self._fh.tell():
                 logger.info("[%s] Log truncation", self.server.slug)
                 self.close(); self.open(); return []
         except OSError:
@@ -153,10 +155,16 @@ def _console_loop(stop_event: threading.Event):
             active_slugs = {s.slug for s in active}
 
             for server in active:
+                if not server.log_file_path:
+                    continue
                 if server.slug not in tailers:
-                    t = _LogTailer(server)
-                    if t.open():
-                        tailers[server.slug] = t
+                    tailers[server.slug] = _LogTailer(server)
+                else:
+                    # Pokud se log_file_path změnil (auto-nastavení při startu), aktualizuj tailer
+                    existing = tailers[server.slug]
+                    if str(existing.path) != server.log_file_path:
+                        existing.close()
+                        tailers[server.slug] = _LogTailer(server)
 
             for slug in list(tailers):
                 if slug not in active_slugs:
