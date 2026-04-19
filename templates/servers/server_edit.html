@@ -230,6 +230,11 @@ label { font-size:12px; color:var(--text-dim); }
         {{ form.backup_max_age_hours }}
         <div class="field-hint">Alert pokud je poslední záloha starší.</div>
       </div>
+      <div class="field-group">
+        <label>Počet záloh k uchování (rotace)</label>
+        {{ form.backup_keep_count }}
+        <div class="field-hint">{{ form.backup_keep_count.help_text }}</div>
+      </div>
     </div>
     {% if not is_create and server.backup_directory %}
     <div id="backup-status" style="margin-top:.75rem;font-size:12px;color:var(--text-dim)">
