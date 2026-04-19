@@ -26,6 +26,17 @@ logger = logging.getLogger(__name__)
 _processes: dict[str, subprocess.Popen] = {}
 
 
+def _resolve_start_command(server: Server) -> str:
+    """Vrátí start command z aktivního profilu, nebo server.start_command jako fallback."""
+    try:
+        profile = server.start_profiles.filter(is_active=True).first()
+        if profile:
+            return profile.build_command()
+    except Exception:
+        pass
+    return server.start_command
+
+
 @dataclass
 class ProcessInfo:
     pid: Optional[int]
@@ -85,6 +96,8 @@ class SubprocessBackend:
         if not os.path.isdir(workdir):
             raise SubprocessError(f"Pracovní adresář neexistuje: {workdir}")
 
+        start_cmd = _resolve_start_command(server)
+
         # Urči cestu k log souboru – pokud není nastavena, použij výchozí
         log_path = server.log_file_path.strip() if server.log_file_path else ""
         if not log_path:
@@ -101,10 +114,11 @@ class SubprocessBackend:
             logger.warning("Nelze otevřít log soubor %s: %s", log_path, exc)
             stdout = subprocess.DEVNULL
 
+        logger.info("Spouštím '%s' v %s", start_cmd, workdir)
         try:
             if sys.platform == "win32":
                 proc = subprocess.Popen(
-                    server.start_command,
+                    start_cmd,
                     cwd=workdir,
                     shell=True,
                     stdin=subprocess.PIPE,
@@ -114,7 +128,7 @@ class SubprocessBackend:
                 )
             else:
                 proc = subprocess.Popen(
-                    shlex.split(server.start_command),
+                    shlex.split(start_cmd),
                     cwd=workdir,
                     stdin=subprocess.PIPE,
                     stdout=stdout,

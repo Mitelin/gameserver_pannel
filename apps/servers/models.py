@@ -149,12 +149,10 @@ class StartProfile(models.Model):
         return " ".join(parts)
 
     def activate(self):
-        """Nastaví tento profil jako aktivní a aktualizuje Server.start_command."""
+        """Nastaví tento profil jako aktivní. Backend použije build_command() při startu."""
         StartProfile.objects.filter(server=self.server, is_active=True).update(is_active=False)
         self.is_active = True
         self.save(update_fields=["is_active"])
-        self.server.start_command = self.build_command()
-        self.server.save(update_fields=["start_command", "updated_at"])
 
 
 class ScheduledRestart(models.Model):

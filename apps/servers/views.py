@@ -305,10 +305,6 @@ def profile_edit(request, slug, pk):
         form = StartProfileForm(request.POST, instance=profile)
         if form.is_valid():
             form.save()
-            # Pokud je profil aktivní, aktualizuj start_command
-            if profile.is_active:
-                server.start_command = profile.build_command()
-                server.save(update_fields=["start_command", "updated_at"])
             messages.success(request, "Profil byl uložen.")
             return redirect(f"/servers/{slug}/profiles/")
     else:
