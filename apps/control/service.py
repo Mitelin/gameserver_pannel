@@ -17,12 +17,36 @@ from django.core.cache import cache
 from apps.servers.models import Server, ServerStatus, ServerProcessState
 from apps.audit.models import AuditEvent
 from apps.console.models import CommandHistory
-from apps.control.backends.tmux import LocalTmuxProcessBackend, TmuxError
 
 logger = logging.getLogger(__name__)
 
-LOCK_TIMEOUT = 30   # sekund – déle než longest expected action
-backend      = LocalTmuxProcessBackend()
+LOCK_TIMEOUT = 30
+
+
+def _get_backend():
+    """Vrátí tmux backend pokud je tmux dostupný, jinak subprocess backend."""
+    import shutil
+    if shutil.which("tmux"):
+        from apps.control.backends.tmux import LocalTmuxProcessBackend
+        return LocalTmuxProcessBackend()
+    from apps.control.backends.subprocess_backend import SubprocessBackend
+    return SubprocessBackend()
+
+
+# Singleton backend – detekován jednou při importu
+backend = _get_backend()
+
+# Unifikovaná výjimka – funguje pro oba backendy
+class BackendError(Exception):
+    pass
+
+
+def _wrap_backend_call(fn, *args, **kwargs):
+    """Zavolá backend funkci a přeloží specifické výjimky na BackendError."""
+    try:
+        return fn(*args, **kwargs)
+    except Exception as exc:
+        raise BackendError(str(exc)) from exc
 
 
 # ─────────────────────────────────────────────────────────────
@@ -123,9 +147,9 @@ def start_server(server: Server, user=None) -> dict:
         _audit(server, "server.start.requested", f"Spuštění požadováno uživatelem {user}", user=user)
 
         try:
-            backend.start_server(server)
+            _wrap_backend_call(backend.start_server, server)
             _mark_dispatched(cmd)
-        except TmuxError as exc:
+        except BackendError as exc:
             _mark_failed(cmd, str(exc))
             _audit(server, "server.start.failed", str(exc), severity="error")
             return {"ok": False, "message": str(exc)}
@@ -155,9 +179,9 @@ def stop_server(server: Server, user=None) -> dict:
         _audit(server, "server.stop.requested", f"Zastavení požadováno uživatelem {user}", user=user)
 
         try:
-            backend.stop_server(server)
+            _wrap_backend_call(backend.stop_server, server)
             _mark_dispatched(cmd)
-        except TmuxError as exc:
+        except BackendError as exc:
             _mark_failed(cmd, str(exc))
             _audit(server, "server.stop.failed", str(exc), severity="error")
             return {"ok": False, "message": str(exc)}
@@ -182,8 +206,8 @@ def restart_server(server: Server, user=None) -> dict:
         # Stop
         stop_cmd = server.stop_command or "stop"
         try:
-            backend.stop_server(server)
-        except TmuxError as exc:
+            _wrap_backend_call(backend.stop_server, server)
+        except BackendError as exc:
             _audit(server, "server.restart.failed", str(exc), severity="error")
             return {"ok": False, "message": f"Stop selhal: {exc}"}
 
@@ -214,9 +238,9 @@ def force_stop_server(server: Server, user=None) -> dict:
                user=user, severity="warning")
 
         try:
-            backend.kill_server(server)
+            _wrap_backend_call(backend.kill_server, server)
             _mark_dispatched(cmd)
-        except TmuxError as exc:
+        except BackendError as exc:
             _mark_failed(cmd, str(exc))
             return {"ok": False, "message": str(exc)}
 
@@ -246,9 +270,9 @@ def send_console_command(server: Server, command: str, user=None) -> dict:
     cmd = _record_command(server, command, user, "web_console")
 
     try:
-        backend.send_command(server, command)
+        _wrap_backend_call(backend.send_command, server, command)
         _mark_dispatched(cmd)
-    except TmuxError as exc:
+    except BackendError as exc:
         _mark_failed(cmd, str(exc))
         return {"ok": False, "message": str(exc)}
 

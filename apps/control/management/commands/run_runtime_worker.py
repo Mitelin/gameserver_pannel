@@ -33,7 +33,7 @@ from apps.console.models import ConsoleLine
 from apps.metrics.models import MetricSample
 from apps.metrics.aggregator import aggregate_to_minutes, aggregate_to_hours, run_retention_cleanup
 from apps.audit.models import AuditEvent
-from apps.control.backends.tmux import LocalTmuxProcessBackend
+from apps.control.service import _get_backend as _get_process_backend
 
 logger = logging.getLogger(__name__)
 
@@ -235,7 +235,7 @@ def _console_loop(stop_event: threading.Event):
 def _metrics_loop(stop_event: threading.Event):
     logger.info("Metrics collector thread spuštěn.")
     channel_layer = get_channel_layer()
-    backend = LocalTmuxProcessBackend()
+    backend = _get_process_backend()
 
     # Stav agregací – lokální pro tento thread (nahrazuje module-level globals)
     last_minute_agg: dict = {}
@@ -661,7 +661,7 @@ def _scheduler_trigger(sched):
     server = sched.server
     logger.info("[scheduler] Spouštím plánovaný restart serveru %s (plán: %s)", server.slug, sched.cron_expression)
 
-    backend = LocalTmuxProcessBackend()
+    backend = _get_process_backend()
 
     # Varování před restartem
     if sched.warn_minutes > 0 and server.status == ServerStatus.ONLINE:
