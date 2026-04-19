@@ -36,6 +36,41 @@ label { font-size:12px; color:var(--text-dim); }
 
 .actions { display:flex; gap:.75rem; align-items:center; margin-top:1.25rem; }
 
+/* ── Path picker modal ── */
+.pp-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:900;display:none;align-items:center;justify-content:center}
+.pp-overlay.open{display:flex}
+.pp-modal{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);
+          width:min(600px,95vw);max-height:80vh;display:flex;flex-direction:column;overflow:hidden}
+.pp-header{padding:.75rem 1rem;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:.5rem}
+.pp-header h3{flex:1;font-size:14px;font-weight:600;margin:0}
+.pp-close{background:none;border:none;color:var(--text-dim);font-size:18px;cursor:pointer;line-height:1}
+.pp-breadcrumb{padding:.5rem 1rem;font-size:12px;color:var(--text-dim);border-bottom:1px solid var(--border);
+               overflow-x:auto;white-space:nowrap;display:flex;gap:.25rem;align-items:center}
+.pp-crumb{color:var(--accent);cursor:pointer;text-decoration:none;padding:.1rem .2rem;border-radius:3px}
+.pp-crumb:hover{background:rgba(255,255,255,.06)}
+.pp-body{flex:1;overflow-y:auto;padding:.5rem}
+.pp-entry{display:flex;align-items:center;gap:.5rem;padding:.35rem .6rem;border-radius:4px;
+          cursor:pointer;font-size:13px;user-select:none}
+.pp-entry:hover{background:rgba(255,255,255,.06)}
+.pp-entry.is-dir{color:var(--text)}
+.pp-entry.is-file{color:var(--text-dim)}
+.pp-icon{font-size:14px;width:18px;text-align:center}
+.pp-footer{padding:.75rem 1rem;border-top:1px solid var(--border);display:flex;align-items:center;gap:.5rem}
+.pp-current-path{flex:1;font-size:12px;font-family:var(--font-mono);color:var(--text-dim);
+                 overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pp-select{padding:.35rem .9rem;border-radius:var(--radius);border:none;background:var(--accent);
+           color:#fff;font-size:13px;font-weight:600;cursor:pointer}
+.pp-select:hover{opacity:.9}
+.pp-back{padding:.35rem .7rem;border-radius:var(--radius);border:1px solid var(--border);
+         background:none;color:var(--text-dim);font-size:12px;cursor:pointer}
+.pp-back:hover{color:var(--text)}
+.btn-browse{padding:.35rem .6rem;border-radius:var(--radius);border:1px solid var(--border);
+            background:var(--bg3);color:var(--text-dim);font-size:12px;cursor:pointer;
+            white-space:nowrap;margin-left:.4rem}
+.btn-browse:hover{color:var(--text);border-color:var(--accent)}
+.path-row{display:flex;align-items:center}
+.path-row .field-input{flex:1}
+
 .profile-list { margin-top:1rem; display:flex; flex-direction:column; gap:.5rem; }
 .profile-item {
   display:flex; align-items:center; gap:.75rem;
@@ -102,7 +137,10 @@ label { font-size:12px; color:var(--text-dim); }
     <div class="field-grid">
       <div class="field-group span2">
         <label>Pracovní adresář</label>
-        {{ form.working_directory }}
+        <div class="path-row">
+          {{ form.working_directory }}
+          <button type="button" class="btn-browse" onclick="openPicker('id_working_directory','dir')">📁 Browse</button>
+        </div>
         {% if form.working_directory.errors %}<div class="field-error">{{ form.working_directory.errors.0 }}</div>{% endif %}
       </div>
       <div class="field-group span2">
@@ -123,7 +161,10 @@ label { font-size:12px; color:var(--text-dim); }
       </div>
       <div class="field-group span2">
         <label>Cesta k log souboru</label>
-        {{ form.log_file_path }}
+        <div class="path-row">
+          {{ form.log_file_path }}
+          <button type="button" class="btn-browse" onclick="openPicker('id_log_file_path','file')">📁 Browse</button>
+        </div>
       </div>
       <div class="field-group">
         <label>Startup timeout (s)</label>
@@ -164,7 +205,10 @@ label { font-size:12px; color:var(--text-dim); }
     <div class="field-grid">
       <div class="field-group span2">
         <label>Adresář se zálohami</label>
-        {{ form.backup_directory }}
+        <div class="path-row">
+          {{ form.backup_directory }}
+          <button type="button" class="btn-browse" onclick="openPicker('id_backup_directory','dir')">📁 Browse</button>
+        </div>
         <div class="field-hint">Pokud je nastaven, watchdog kontroluje stáří souborů v tomto adresáři.</div>
         {% if form.backup_directory.errors %}<div class="field-error">{{ form.backup_directory.errors.0 }}</div>{% endif %}
       </div>
@@ -255,4 +299,100 @@ label { font-size:12px; color:var(--text-dim); }
   {% endif %}
 </div>
 {% endif %}
+
+<!-- Path picker modal -->
+<div class="pp-overlay" id="pp-overlay" onclick="if(event.target===this)closePicker()">
+  <div class="pp-modal">
+    <div class="pp-header">
+      <h3 id="pp-title">Vybrat cestu</h3>
+      <button class="pp-close" onclick="closePicker()">✕</button>
+    </div>
+    <div class="pp-breadcrumb" id="pp-breadcrumb"></div>
+    <div class="pp-body" id="pp-body">
+      <div style="color:var(--text-dim);font-size:13px;padding:.5rem">Načítám…</div>
+    </div>
+    <div class="pp-footer">
+      <div class="pp-current-path" id="pp-current-path">/</div>
+      <button class="pp-back" onclick="ppUp()">↑ Nahoru</button>
+      <button class="pp-select" onclick="ppSelect()">✓ Vybrat tuto cestu</button>
+    </div>
+  </div>
+</div>
+
+<script>
+let _ppField = null;
+let _ppMode  = 'dir';
+let _ppCurrent = '';
+
+function openPicker(fieldId, mode) {
+  _ppField = document.getElementById(fieldId);
+  _ppMode  = mode;
+  document.getElementById('pp-title').textContent =
+    mode === 'file' ? 'Vybrat soubor' : 'Vybrat adresář';
+  document.getElementById('pp-overlay').classList.add('open');
+  const startPath = _ppField.value.trim() || '';
+  ppLoad(startPath);
+}
+
+function closePicker() {
+  document.getElementById('pp-overlay').classList.remove('open');
+}
+
+function ppSelect() {
+  if (_ppField) _ppField.value = _ppCurrent;
+  closePicker();
+}
+
+function ppUp() {
+  const parent = document.getElementById('pp-body').dataset.parent;
+  if (parent) ppLoad(parent);
+}
+
+async function ppLoad(path) {
+  const body = document.getElementById('pp-body');
+  body.innerHTML = '<div style="color:var(--text-dim);font-size:13px;padding:.5rem">Načítám…</div>';
+  const showFiles = _ppMode === 'file' ? '1' : '0';
+  const r = await fetch(`/servers/path-picker/?path=${encodeURIComponent(path)}&files=${showFiles}`);
+  const d = await r.json();
+  if (!d.ok) {
+    body.innerHTML = `<div style="color:var(--red);font-size:13px;padding:.5rem">${d.message}</div>`;
+    return;
+  }
+
+  _ppCurrent = d.current;
+  document.getElementById('pp-current-path').textContent = d.current;
+  body.dataset.parent = d.parent || '';
+
+  // Breadcrumb
+  const bc = document.getElementById('pp-breadcrumb');
+  bc.innerHTML = d.parts.map((p, i) =>
+    `<span class="pp-crumb" onclick="ppLoad(${JSON.stringify(p.path)})">${p.name || '/'}</span>`
+    + (i < d.parts.length - 1 ? '<span style="opacity:.4">/</span>' : '')
+  ).join('');
+
+  // Položky
+  if (!d.entries.length) {
+    body.innerHTML = '<div style="color:var(--text-dim);font-size:12px;padding:.5rem">Prázdný adresář.</div>';
+    return;
+  }
+  body.innerHTML = d.entries.map(e => {
+    const icon = e.is_dir ? '📁' : '📄';
+    const cls  = e.is_dir ? 'is-dir' : 'is-file';
+    const action = e.is_dir
+      ? `ppLoad(${JSON.stringify(e.path)})`
+      : `ppPickFile(${JSON.stringify(e.path)})`;
+    return `<div class="pp-entry ${cls}" onclick="${action}">
+      <span class="pp-icon">${icon}</span>
+      <span>${e.name}</span>
+    </div>`;
+  }).join('');
+}
+
+function ppPickFile(path) {
+  _ppCurrent = path;
+  document.getElementById('pp-current-path').textContent = path;
+}
+
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closePicker(); });
+</script>
 {% endblock %}

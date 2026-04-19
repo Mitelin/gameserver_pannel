@@ -51,6 +51,73 @@ def _require_staff(request):
 
 
 @login_required
+def path_picker_api(request):
+    """
+    JSON API pro procházení souborového systému v modalu pro výběr cesty.
+    Vrátí seznam adresářů a souborů pro danou cestu.
+    Přístupné pouze pro staff.
+    """
+    if not request.user.is_staff:
+        return JsonResponse({"ok": False, "message": "Přístup odepřen."}, status=403)
+
+    raw = request.GET.get("path", "").strip()
+    show_files = request.GET.get("files", "1") == "1"
+
+    # Výchozí cesta – root souborového systému
+    if not raw:
+        import sys
+        raw = "C:\\" if sys.platform == "win32" else "/"
+
+    try:
+        current = Path(raw).resolve()
+    except Exception:
+        return JsonResponse({"ok": False, "message": "Neplatná cesta."}, status=400)
+
+    if not current.exists():
+        # Pokud neexistuje, zkus parent
+        current = current.parent if current.parent.exists() else Path(raw).parent.resolve()
+
+    if not current.is_dir():
+        current = current.parent
+
+    entries = []
+    try:
+        for item in sorted(current.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower())):
+            try:
+                is_dir = item.is_dir()
+                if not is_dir and not show_files:
+                    continue
+                entries.append({
+                    "name":   item.name,
+                    "path":   str(item),
+                    "is_dir": is_dir,
+                })
+            except PermissionError:
+                continue
+    except PermissionError:
+        return JsonResponse({"ok": False, "message": f"Přístup odepřen: {current}"}, status=403)
+
+    # Sestavení breadcrumb
+    parts = []
+    p = current
+    while True:
+        parts.append({"name": p.name or str(p), "path": str(p)})
+        parent = p.parent
+        if parent == p:
+            break
+        p = parent
+    parts.reverse()
+
+    return JsonResponse({
+        "ok":      True,
+        "current": str(current),
+        "parent":  str(current.parent) if current.parent != current else None,
+        "parts":   parts,
+        "entries": entries,
+    })
+
+
+@login_required
 def file_browser(request, slug):
     """Zobrazí obsah adresáře."""
     _require_staff(request)
