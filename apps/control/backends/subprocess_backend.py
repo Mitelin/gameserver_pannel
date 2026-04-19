@@ -104,14 +104,13 @@ class SubprocessBackend:
 
         start_cmd = _resolve_start_command(server)
 
-        # Urči cestu k log souboru – pokud není nastavena, použij výchozí
+        # Urči cestu k log souboru – pokud není nastavena nebo je to adresář, použij výchozí
         log_path = server.log_file_path.strip() if server.log_file_path else ""
-        if not log_path:
+        if not log_path or Path(log_path).is_dir():
             log_path = str(Path(workdir) / "panel_output.log")
-            # Ulož cestu zpět na server aby ji konzole tailer našel
             server.log_file_path = log_path
             server.save(update_fields=["log_file_path"])
-            logger.info("log_file_path nebyl nastaven, použiji: %s", log_path)
+            logger.info("log_file_path nebyl soubor, použiji: %s", log_path)
 
         try:
             Path(log_path).parent.mkdir(parents=True, exist_ok=True)

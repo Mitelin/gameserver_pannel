@@ -226,11 +226,17 @@ class LogTailView(LoginRequiredMixin, View):
 
         n = min(int(request.GET.get("lines", 200)), self.MAX_LINES)
         log_path = server.log_file_path.strip() if server.log_file_path else ""
+        if not log_path or os.path.isdir(log_path):
+            # Fallback: panel_output.log ve working directory
+            wd = server.working_directory.strip()
+            if wd and not os.path.isdir(wd):
+                return JsonResponse({"ok": True, "lines": [], "info": "working_directory neexistuje"})
+            log_path = os.path.join(wd, "panel_output.log") if wd else ""
         if not log_path:
             return JsonResponse({"ok": True, "lines": [], "info": "log_file_path není nastaven"})
 
         try:
-            import os, collections
+            import collections
             size = os.path.getsize(log_path)
             buf  = collections.deque(maxlen=n)
             with open(log_path, "r", encoding="utf-8", errors="replace") as f:
