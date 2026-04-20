@@ -4,9 +4,8 @@ apps/control/backends/subprocess_backend.py
 SubprocessBackend – spouští servery přímo přes subprocess.Popen.
 Funguje na Windows i Linuxu bez tmux.
 
-stdout procesu se čte přes PIPE v dedikovaném vlákně a posílá
-do WebSocket channel layer (konzole v reálném čase).
-Stdin handle se drží v paměti procesu (ztratí se po restartu panelu).
+stdout procesu se čte přes PIPE v dedikovaném vlákně. Řádky jdou
+do log souboru (polling) + fronty → dispatcher thread → WebSocket.
 """
 import os
 import sys
@@ -14,6 +13,7 @@ import shlex
 import logging
 import subprocess
 import threading
+import queue
 from pathlib import Path
 from typing import Optional
 from dataclasses import dataclass
@@ -26,8 +26,8 @@ logger = logging.getLogger(__name__)
 
 # slug → Popen
 _processes: dict[str, subprocess.Popen] = {}
-# slug → reader Thread
-_readers: dict[str, threading.Thread] = {}
+# slug → Queue[str | None]  (None = konec streamu)
+_queues: dict[str, queue.Queue] = {}
 
 
 def _resolve_start_command(server: Server) -> str:
@@ -42,35 +42,24 @@ def _resolve_start_command(server: Server) -> str:
     return ""
 
 
-def _stdout_reader(slug: str, server_id: str, proc: subprocess.Popen, log_path: str):
-    """
-    Běží v samostatném vlákně pro každý spuštěný server.
-    Čte stdout procesu řádek po řádku a:
-      1. zapisuje do log souboru
-      2. posílá do WebSocket channel layer (konzole v reálném čase)
-      3. ukládá do ConsoleLine DB (history při reconnect)
-    """
-    from channels.layers import get_channel_layer
-    from asgiref.sync import async_to_sync
-    from django.utils import timezone
+# ── Reader thread: čte stdout procesu, píše do souboru + fronty ──────────────
 
-    channel_layer = get_channel_layer()
-    group = f"server.{server_id}.console"
-
+def _stdout_reader(slug: str, proc: subprocess.Popen, log_path: str, q: queue.Queue):
+    """Čte stdout procesu řádek po řádku. Nepoužívá async — žádné blokování."""
     log_fh = None
     if log_path:
         try:
             Path(log_path).parent.mkdir(parents=True, exist_ok=True)
             log_fh = open(log_path, "a", encoding="utf-8", errors="replace")
         except Exception as e:
-            logger.warning("[%s] Nelze otevřít log soubor %s: %s", slug, log_path, e)
+            logger.warning("[%s] Nelze otevřít log soubor: %s", slug, e)
 
     logger.info("[%s] stdout reader spuštěn", slug)
     try:
         for raw in proc.stdout:
-            line = raw.rstrip("\r\n") if isinstance(raw, str) else raw.decode("utf-8", errors="replace").rstrip("\r\n")
+            line = raw if isinstance(raw, str) else raw.decode("utf-8", errors="replace")
+            line = line.rstrip("\r\n")
 
-            # 1) Log soubor
             if log_fh:
                 try:
                     log_fh.write(line + "\n")
@@ -78,33 +67,10 @@ def _stdout_reader(slug: str, server_id: str, proc: subprocess.Popen, log_path: 
                 except Exception:
                     pass
 
-            # 2) WebSocket push
             try:
-                async_to_sync(channel_layer.group_send)(
-                    group,
-                    {
-                        "type":      "console.line",
-                        "server_id": server_id,
-                        "timestamp": timezone.now().isoformat(),
-                        "line":      line,
-                    },
-                )
-            except Exception as e:
-                logger.debug("[%s] WS push selhal: %s", slug, e)
-
-            # 3) ConsoleLine DB (pro historii při reconnect)
-            try:
-                from apps.console.models import ConsoleLine
-                from apps.servers.models import Server as ServerModel
-                srv = ServerModel.objects.only("id").get(slug=slug)
-                ConsoleLine.objects.create(
-                    server=srv,
-                    line=line,
-                    stream_type="stdout",
-                    source="subprocess",
-                )
-            except Exception:
-                pass
+                q.put_nowait(line)
+            except queue.Full:
+                pass  # zahoď pokud fronta přeplněna
 
     except Exception as e:
         logger.warning("[%s] stdout reader chyba: %s", slug, e)
@@ -114,8 +80,72 @@ def _stdout_reader(slug: str, server_id: str, proc: subprocess.Popen, log_path: 
                 log_fh.close()
             except Exception:
                 pass
-        _readers.pop(slug, None)
+        q.put(None)  # signál konce
+        _queues.pop(slug, None)
         logger.info("[%s] stdout reader ukončen", slug)
+
+
+# ── Dispatcher thread: vybírá z fronty a pushuje do WS + DB ──────────────────
+
+def _ws_dispatcher(slug: str, server_id: str, q: queue.Queue):
+    """
+    Bere řádky z fronty a posílá do WebSocket channel layer + ConsoleLine DB.
+    Oddělen od reader threadu aby async_to_sync nikdy neblokoval čtení stdout.
+    """
+    from channels.layers import get_channel_layer
+    from asgiref.sync import async_to_sync
+    from django.utils import timezone
+
+    channel_layer = get_channel_layer()
+    group = f"server.{server_id}.console"
+    batch = []
+
+    def flush_batch():
+        if not batch:
+            return
+        try:
+            from apps.console.models import ConsoleLine
+            from apps.servers.models import Server as Srv
+            srv = Srv.objects.only("id").get(slug=slug)
+            ConsoleLine.objects.bulk_create([
+                ConsoleLine(server=srv, line=l, stream_type="stdout", source="subprocess")
+                for l in batch
+            ])
+        except Exception as e:
+            logger.debug("[%s] ConsoleLine bulk_create chyba: %s", slug, e)
+        batch.clear()
+
+    logger.info("[%s] WS dispatcher spuštěn", slug)
+    while True:
+        try:
+            item = q.get(timeout=0.5)
+        except queue.Empty:
+            flush_batch()
+            continue
+
+        if item is None:   # konec streamu
+            flush_batch()
+            break
+
+        # WebSocket push
+        try:
+            async_to_sync(channel_layer.group_send)(
+                group,
+                {
+                    "type":      "console.line",
+                    "server_id": server_id,
+                    "timestamp": timezone.now().isoformat(),
+                    "line":      item,
+                },
+            )
+        except Exception as e:
+            logger.debug("[%s] WS push chyba: %s", slug, e)
+
+        batch.append(item)
+        if len(batch) >= 20:
+            flush_batch()
+
+    logger.info("[%s] WS dispatcher ukončen", slug)
 
 
 @dataclass
@@ -148,8 +178,7 @@ class SubprocessBackend:
         if proc is not None:
             if proc.poll() is None:
                 return proc.pid
-            else:
-                _processes.pop(server.slug, None)
+            _processes.pop(server.slug, None)
         try:
             return int(self._pid_file(server).read_text().strip())
         except (OSError, ValueError):
@@ -178,14 +207,13 @@ class SubprocessBackend:
         if not start_cmd:
             raise SubprocessError("Žádný start command ani aktivní profil.")
 
-        # Log soubor – pokud je prázdný nebo je to adresář, použij výchozí
         log_path = server.log_file_path.strip() if server.log_file_path else ""
         if not log_path or Path(log_path).is_dir():
             log_path = str(Path(workdir) / "panel_output.log")
             server.log_file_path = log_path
             server.save(update_fields=["log_file_path"])
 
-        logger.info("[%s] Spouštím '%s' v %s", server.slug, start_cmd, workdir)
+        logger.info("[%s] Spouštím '%s' v %s, log: %s", server.slug, start_cmd, workdir, log_path)
         try:
             if sys.platform == "win32":
                 proc = subprocess.Popen(
@@ -220,17 +248,22 @@ class SubprocessBackend:
         _processes[server.slug] = proc
         self._save_pid(server, proc.pid)
 
-        # Spusť reader vlákno – čte stdout a posílá do WS + DB
-        t = threading.Thread(
-            target=_stdout_reader,
-            args=(server.slug, str(server.id), proc, log_path),
-            daemon=True,
-            name=f"reader-{server.slug}",
-        )
-        t.start()
-        _readers[server.slug] = t
+        q: queue.Queue = queue.Queue(maxsize=2000)
+        _queues[server.slug] = q
 
-        logger.info("[%s] Spuštěn, PID %d, reader thread: %s", server.slug, proc.pid, t.name)
+        threading.Thread(
+            target=_stdout_reader,
+            args=(server.slug, proc, log_path, q),
+            daemon=True, name=f"reader-{server.slug}",
+        ).start()
+
+        threading.Thread(
+            target=_ws_dispatcher,
+            args=(server.slug, str(server.id), q),
+            daemon=True, name=f"dispatcher-{server.slug}",
+        ).start()
+
+        logger.info("[%s] Spuštěn PID %d", server.slug, proc.pid)
 
     def stop_server(self, server: Server) -> None:
         stop_cmd = (server.stop_command or "stop").strip()
@@ -239,7 +272,6 @@ class SubprocessBackend:
             try:
                 proc.stdin.write(stop_cmd + "\n")
                 proc.stdin.flush()
-                logger.info("[%s] Stop command '%s' odeslán", server.slug, stop_cmd)
                 return
             except Exception as exc:
                 logger.warning("[%s] Nelze zapsat do stdin: %s", server.slug, exc)
@@ -247,7 +279,6 @@ class SubprocessBackend:
         if pid:
             try:
                 psutil.Process(pid).terminate()
-                logger.info("[%s] SIGTERM odeslán PID %d", server.slug, pid)
             except psutil.NoSuchProcess:
                 pass
 
@@ -256,7 +287,6 @@ class SubprocessBackend:
         if proc and proc.poll() is None:
             try:
                 proc.kill()
-                logger.warning("[%s] SIGKILL odeslán PID %d", server.slug, proc.pid)
                 return
             except Exception:
                 pass
@@ -264,7 +294,6 @@ class SubprocessBackend:
         if pid:
             try:
                 psutil.Process(pid).kill()
-                logger.warning("[%s] SIGKILL přes PID %d", server.slug, pid)
             except psutil.NoSuchProcess:
                 pass
         try:
