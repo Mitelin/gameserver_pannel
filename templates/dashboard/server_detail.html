@@ -560,19 +560,17 @@ let _pollTimer = null;
 async function pollLog(){
   try {
     const r = await fetch(`/servers/${SLUG}/console/logtail/?lines=200`);
+    if(!r.ok){ appendLine(`[POLL ERROR] HTTP ${r.status}`, true); _pollTimer=setTimeout(pollLog,5000); return; }
     const d = await r.json();
-    if(!d.ok || !d.lines) return;
-    let added = 0;
+    if(!d.ok || !d.lines){ appendLine(`[POLL] no lines: ${JSON.stringify(d)}`, true); _pollTimer=setTimeout(pollLog,5000); return; }
     for(const line of d.lines){
       if(!_pollLines.has(line)){
         _pollLines.add(line);
         appendLine(line, true);
-        added++;
       }
     }
-    // Udržuj Set malý
     if(_pollLines.size > 2000) _pollLines = new Set([...d.lines]);
-  } catch(e){ /* ignore */ }
+  } catch(e){ appendLine(`[POLL EXCEPTION] ${e}`, true); }
   _pollTimer = setTimeout(pollLog, 3000);
 }
 
