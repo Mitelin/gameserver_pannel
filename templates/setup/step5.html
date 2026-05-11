@@ -62,12 +62,6 @@
       {{ form.stop_command }}
       {% for e in form.stop_command.errors %}<div class="error-text">{{ e }}</div>{% endfor %}
     </div>
-    <div class="form-group">
-      <label>{{ form.tmux_session_name.label }}</label>
-      {{ form.tmux_session_name }}
-      <div class="help-text">{{ form.tmux_session_name.help_text }}</div>
-      {% for e in form.tmux_session_name.errors %}<div class="error-text">{{ e }}</div>{% endfor %}
-    </div>
   </div>
 
   <div class="wizard-actions">

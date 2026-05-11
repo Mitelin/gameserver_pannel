@@ -208,12 +208,12 @@ class FirstServerForm(forms.Form):
         help_text="Např. stop – volitelné",
     )
     tmux_session_name = forms.CharField(
-        max_length=64, label="tmux session název",
-        help_text="Unikátní název tmux session pro tento server",
+        max_length=64, label="tmux session název", required=False,
+        help_text="Volitelné – na Windows se nepoužívá",
     )
     log_file_path     = forms.CharField(
-        max_length=512, label="Cesta k log souboru",
-        help_text="Např. /srv/mc-prod/logs/latest.log",
+        max_length=512, label="Cesta k log souboru", required=False,
+        help_text="Nechte prázdné – panel nastaví automaticky",
     )
 
     def __init__(self, *args, **kwargs):
@@ -229,8 +229,4 @@ class FirstServerForm(forms.Form):
         return slug
 
     def clean_tmux_session_name(self):
-        from apps.servers.models import Server
-        name = self.cleaned_data["tmux_session_name"]
-        if Server.objects.filter(tmux_session_name=name).exists():
-            raise ValidationError("tmux session s tímto názvem již existuje.")
-        return name
+        return self.cleaned_data.get("tmux_session_name", "")

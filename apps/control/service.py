@@ -131,6 +131,90 @@ def _mark_failed(cmd: CommandHistory, message: str):
 
 
 # ─────────────────────────────────────────────────────────────
+# Startup watchdog (bez externího workeru)
+# ─────────────────────────────────────────────────────────────
+
+def _push_status_ws(server_id: str, status: str):
+    try:
+        from channels.layers import get_channel_layer
+        from asgiref.sync import async_to_sync
+        layer = get_channel_layer()
+        async_to_sync(layer.group_send)(
+            f"server.{server_id}.status",
+            {"type": "server.status", "status": status},
+        )
+    except Exception as e:
+        logger.debug("[push_status_ws] %s", e)
+
+def _watch_startup(server_pk, server_slug, max_wait=120, interval=5):
+    """Daemon thread: hlídá startup a přepne status na ONLINE/CRASHED."""
+    import time
+    import django
+    django.setup.__module__  # ensure Django is ready (already is in threads)
+    from django.db import connection as _conn
+
+    for _ in range(max_wait // interval):
+        time.sleep(interval)
+        try:
+            _conn.close()  # nový connection z poolu pro tento thread
+            srv = Server.objects.get(pk=server_pk)
+            if srv.status not in (ServerStatus.STARTING,):
+                break  # jiná akce mezitím změnila stav
+            info = backend.get_process_info(srv)
+            if info.status == ServerStatus.ONLINE:
+                _set_server_status(srv, ServerStatus.ONLINE)
+                state = _ensure_process_state(srv)
+                state.status = ServerStatus.ONLINE
+                state.pid    = info.pid
+                state.save(update_fields=["status", "pid"])
+                _push_status_ws(str(srv.id), ServerStatus.ONLINE)
+                break
+            elif info.status == ServerStatus.CRASHED:
+                _set_server_status(srv, ServerStatus.CRASHED)
+                _push_status_ws(str(srv.id), ServerStatus.CRASHED)
+                break
+        except Exception as e:
+            logger.debug("[watch_startup %s] %s", server_slug, e)
+
+
+def _watch_shutdown(server_pk, server_slug, max_wait=60, interval=3):
+    """Daemon thread: čeká na zastavení procesu a přepne status na OFFLINE."""
+    import time
+    from django.db import connection as _conn
+
+    for _ in range(max_wait // interval):
+        time.sleep(interval)
+        try:
+            _conn.close()
+            srv = Server.objects.get(pk=server_pk)
+            if srv.status not in (ServerStatus.STOPPING,):
+                break
+            info = backend.get_process_info(srv)
+            if info.status in (ServerStatus.OFFLINE, ServerStatus.CRASHED):
+                _set_server_status(srv, ServerStatus.OFFLINE)
+                state = _ensure_process_state(srv)
+                state.status     = ServerStatus.OFFLINE
+                state.stopped_at = timezone.now()
+                state.pid        = None
+                state.save(update_fields=["status", "stopped_at", "pid"])
+                _push_status_ws(str(srv.id), ServerStatus.OFFLINE)
+                break
+        except Exception as e:
+            logger.debug("[watch_shutdown %s] %s", server_slug, e)
+    else:
+        # Timeout — force kill
+        try:
+            _conn.close()
+            srv = Server.objects.get(pk=server_pk)
+            if srv.status == ServerStatus.STOPPING:
+                backend.kill_server(srv)
+                _set_server_status(srv, ServerStatus.OFFLINE)
+                _push_status_ws(str(srv.id), ServerStatus.OFFLINE)
+        except Exception as e:
+            logger.debug("[watch_shutdown force %s] %s", server_slug, e)
+
+
+# ─────────────────────────────────────────────────────────────
 # Akce
 # ─────────────────────────────────────────────────────────────
 
@@ -164,6 +248,15 @@ def start_server(server: Server, user=None) -> dict:
         _set_server_status(server, ServerStatus.STARTING)
         _audit(server, "server.start.dispatched", "tmux session spuštěna", user=user)
 
+        # Background thread: přepne status na ONLINE jakmile process běží
+        import threading
+        server_pk = server.pk
+        server_slug = server.slug
+        threading.Thread(
+            target=_watch_startup, args=(server_pk, server_slug),
+            daemon=True, name=f"startup-watch-{server_slug}",
+        ).start()
+
         return {"ok": True, "message": "Server startuje…"}
 
 
@@ -192,6 +285,12 @@ def stop_server(server: Server, user=None) -> dict:
 
         _set_server_status(server, ServerStatus.STOPPING)
         _audit(server, "server.stop.dispatched", "Stop command odeslán", user=user)
+
+        import threading
+        threading.Thread(
+            target=_watch_shutdown, args=(server.pk, server.slug),
+            daemon=True, name=f"shutdown-watch-{server.slug}",
+        ).start()
 
         return {"ok": True, "message": "Server se zastavuje…"}
 
@@ -258,8 +357,8 @@ def force_stop_server(server: Server, user=None) -> dict:
 
 
 def send_console_command(server: Server, command: str, user=None) -> dict:
-    if server.status != ServerStatus.ONLINE:
-        return {"ok": False, "message": "Server není online."}
+    if server.status not in (ServerStatus.ONLINE, ServerStatus.STARTING):
+        return {"ok": False, "message": "Server není spuštěný."}
     if not command.strip():
         return {"ok": False, "message": "Prázdný příkaz."}
     # Základní ochrana – nepovolíme ; && || pro command injection

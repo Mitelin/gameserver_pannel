@@ -68,15 +68,21 @@ def server_detail(request, slug):
     from apps.alerts.models import AlertRule
     alert_rules = AlertRule.objects.filter(server=server, is_active=True)
 
+    try:
+        active_profile = server.start_profiles.filter(is_active=True).first()
+    except Exception:
+        active_profile = None
+
     ctx = {
-        "server":        server,
-        "process_state": process_state,
-        "initial_lines": initial_lines,
+        "server":         server,
+        "process_state":  process_state,
+        "initial_lines":  initial_lines,
         "recent_commands": recent_commands,
-        "recent_events": recent_events,
-        "alert_rules":   alert_rules,
-        "ws_url":        f"/ws/servers/{server.slug}/",
-        "rcon_enabled":  server.rcon_enabled,
+        "recent_events":  recent_events,
+        "alert_rules":    alert_rules,
+        "ws_url":         f"/ws/servers/{server.slug}/",
+        "rcon_enabled":   server.rcon_enabled,
+        "active_profile": active_profile,
     }
     return render(request, "dashboard/server_detail.html", ctx)
 
@@ -178,15 +184,23 @@ def server_status_api(request, slug):
     if not can_view_server(request.user, server):
         raise PermissionDenied
     try:
-        ps = server.process_state
+        from apps.control.service import backend
+        info = backend.get_process_info(server)
+        if server.status != info.status:
+            server.status = info.status
+            server.save(update_fields=["status"])
+        players = 0
+        try:
+            players = server.process_state.last_player_count
+        except Exception:
+            pass
         return JsonResponse({
-            "status":       server.status,
-            "pid":          ps.pid,
-            "cpu_percent":  ps.cpu_percent_last,
-            "ram_bytes":    ps.rss_bytes_last,
-            "players":      ps.last_player_count,
-            "threads":      ps.thread_count_last,
-            "last_seen_at": server.last_seen_at.isoformat() if server.last_seen_at else None,
+            "status":      info.status,
+            "pid":         info.pid,
+            "cpu_percent": info.cpu_percent,
+            "ram_bytes":   info.rss_bytes,
+            "players":     players,
+            "threads":     info.thread_count,
         })
     except Exception:
         return JsonResponse({"status": server.status})

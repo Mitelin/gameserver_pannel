@@ -15,7 +15,7 @@ class ServerForm(forms.ModelForm):
         fields = [
             "name", "slug", "game_type", "is_active",
             "working_directory", "start_command", "stop_command",
-            "tmux_session_name", "log_file_path",
+            "log_file_path",
             "expected_startup_seconds", "expected_shutdown_seconds",
             "rcon_enabled", "rcon_host", "rcon_port", "rcon_password",
             "webhook_url", "webhook_on_crash", "webhook_on_start", "webhook_on_stop",
@@ -28,7 +28,6 @@ class ServerForm(forms.ModelForm):
             "working_directory": forms.TextInput(attrs={"class": "field-input", "placeholder": "/srv/mc"}),
             "start_command":     forms.TextInput(attrs={"class": "field-input", "placeholder": "java -jar server.jar --nogui"}),
             "stop_command":      forms.TextInput(attrs={"class": "field-input", "placeholder": "stop"}),
-            "tmux_session_name": forms.TextInput(attrs={"class": "field-input"}),
             "log_file_path":     forms.TextInput(attrs={"class": "field-input", "placeholder": "/srv/mc/logs/latest.log"}),
             "rcon_host":         forms.TextInput(attrs={"class": "field-input", "placeholder": "127.0.0.1"}),
             "rcon_port":         forms.NumberInput(attrs={"class": "field-input"}),
@@ -40,7 +39,6 @@ class ServerForm(forms.ModelForm):
         }
         help_texts = {
             "slug":              "URL identifikátor – jen malá písmena, čísla, pomlčky.",
-            "tmux_session_name": "Unikátní název tmux session (např. mc-survival).",
             "start_command":     "Příkaz pro spuštění. Nechte prázdné pro použití start profilu.",
         }
 
@@ -50,9 +48,10 @@ class StartProfileForm(forms.ModelForm):
 
     class Meta:
         model  = StartProfile
-        fields = ["name", "jar_file", "heap_min_mb", "heap_max_mb", "jvm_flags", "extra_args"]
+        fields = ["name", "java_path", "jar_file", "heap_min_mb", "heap_max_mb", "jvm_flags", "extra_args"]
         widgets = {
             "name":        forms.TextInput(attrs={"class": "field-input", "placeholder": "Výchozí profil"}),
+            "java_path":   forms.TextInput(attrs={"class": "field-input field-mono", "placeholder": 'C:\\Program Files\\Java\\jdk-21\\bin\\java.exe'}),
             "jar_file":    forms.TextInput(attrs={"class": "field-input", "placeholder": "server.jar"}),
             "heap_min_mb": forms.NumberInput(attrs={"class": "field-input"}),
             "heap_max_mb": forms.NumberInput(attrs={"class": "field-input"}),

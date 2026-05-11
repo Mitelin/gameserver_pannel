@@ -52,6 +52,29 @@ label { font-size:12px; color:var(--text-dim); }
         {{ form.name }}
         {% if form.name.errors %}<div class="field-error">{{ form.name.errors.0 }}</div>{% endif %}
       </div>
+
+      <!-- Java detekce -->
+      <div class="field-group span2">
+        <label>Java instalace</label>
+        <div style="display:flex;gap:.5rem;align-items:center">
+          <select id="java-select" class="field-input" style="flex:1"
+                  onchange="document.getElementById('id_java_path').value=this.value">
+            <option value="">-- Klikni Najít nebo zadej ručně --</option>
+          </select>
+          <button type="button" class="btn btn-ghost" id="java-detect-btn"
+                  onclick="detectJava()" style="white-space:nowrap;font-size:12px">
+            🔍 Najít Java
+          </button>
+        </div>
+        <div class="field-hint" id="java-detect-status" style="margin-top:.3rem"></div>
+      </div>
+      <div class="field-group span2">
+        <label>Cesta k java.exe (nebo prázdné pro java z PATH)</label>
+        {{ form.java_path }}
+        {% if form.java_path.errors %}<div class="field-error">{{ form.java_path.errors.0 }}</div>{% endif %}
+        <div class="field-hint">Vyberte z dropdownu výše nebo zadejte ručně.</div>
+      </div>
+
       <div class="field-group span2">
         <label>JAR soubor</label>
         {{ form.jar_file }}
@@ -94,4 +117,44 @@ label { font-size:12px; color:var(--text-dim); }
     <a href="/servers/{{ server.slug }}/profiles/" class="btn btn-ghost">Zrušit</a>
   </div>
 </form>
+
+{% block extra_js %}
+<script>
+(function(){
+  const cur = document.getElementById("id_java_path");
+  if(cur && cur.value){
+    const sel = document.getElementById("java-select");
+    const opt = new Option("(aktuální) " + cur.value, cur.value, true, true);
+    sel.add(opt, 0);
+  }
+})();
+
+async function detectJava(){
+  const btn    = document.getElementById("java-detect-btn");
+  const status = document.getElementById("java-detect-status");
+  const sel    = document.getElementById("java-select");
+  btn.disabled = true; btn.textContent = "⏳ Hledám…"; status.textContent = "";
+  try {
+    const r = await fetch("/servers/java/detect/");
+    const d = await r.json();
+    if(!d.ok || !d.installs || !d.installs.length){
+      status.textContent = "Žádná Java nenalezena – zadej cestu ručně.";
+      status.style.color = "#ef4444"; return;
+    }
+    while(sel.options.length > 1) sel.remove(1);
+    for(const j of d.installs){
+      sel.add(new Option(`Java ${j.major} – ${j.vendor}  [${j.path}]`, j.path));
+    }
+    sel.selectedIndex = 1;
+    document.getElementById("id_java_path").value = sel.value;
+    status.textContent = `Nalezeno ${d.installs.length} instalací.`;
+    status.style.color = "#22c55e";
+  } catch(e){
+    status.textContent = "Chyba: " + e; status.style.color = "#ef4444";
+  } finally {
+    btn.disabled = false; btn.textContent = "🔍 Najít Java";
+  }
+}
+</script>
+{% endblock %}
 {% endblock %}

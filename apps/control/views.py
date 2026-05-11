@@ -8,6 +8,7 @@ Přidáno:
 """
 import json
 import logging
+import os
 
 from django.http import JsonResponse
 from django.views import View
@@ -251,3 +252,56 @@ class LogTailView(LoginRequiredMixin, View):
         except Exception as e:
             logger.warning("LogTailView %s: %s", slug, e)
             return JsonResponse({"ok": False, "lines": [], "info": str(e)})
+
+
+class JavaDetectView(LoginRequiredMixin, View):
+    """GET /api/java/detect/ — vrátí nalezené Java instalace."""
+    raise_exception = True
+
+    def get(self, request):
+        if not request.user.is_staff:
+            return JsonResponse({"ok": False}, status=403)
+        from apps.servers.java_detect import detect_java
+        installs = detect_java()
+        return JsonResponse({
+            "ok": True,
+            "installs": [
+                {"path": j.path, "version": j.version, "vendor": j.vendor,
+                 "major": j.major, "label": j.label()}
+                for j in installs
+            ],
+        })
+
+
+class StatusView(LoginRequiredMixin, View):
+    """
+    GET /servers/<slug>/status/
+    Vrátí aktuální stav serveru (zjistí přímo z procesu).
+    """
+    raise_exception = True
+
+    def get(self, request, slug):
+        from apps.users.permissions import can_view_server
+        from apps.control.service import backend
+        server = get_object_or_404(Server, slug=slug, is_active=True)
+        if not can_view_server(request.user, server):
+            return JsonResponse({"ok": False}, status=403)
+
+        try:
+            info = backend.get_process_info(server)
+            actual_status = info.status
+            # Aktualizuj DB pokud se liší
+            if server.status != actual_status:
+                from apps.servers.models import ServerStatus
+                server.status = actual_status
+                server.save(update_fields=["status"])
+            return JsonResponse({
+                "ok":     True,
+                "status": actual_status,
+                "pid":    info.pid,
+                "cpu":    info.cpu_percent,
+                "ram":    info.rss_bytes,
+                "threads": info.thread_count,
+            })
+        except Exception as e:
+            return JsonResponse({"ok": False, "status": server.status})

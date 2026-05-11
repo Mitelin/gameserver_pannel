@@ -21,6 +21,8 @@ urlpatterns = [
     path("<slug:slug>/actions/force-stop/", views.ForceStopView.as_view(),   name="force_stop"),
     path("<slug:slug>/console/send/",       views.SendCommandView.as_view(), name="send_command"),
     path("<slug:slug>/console/logtail/",    views.LogTailView.as_view(),     name="logtail"),
+    path("<slug:slug>/status/",             views.StatusView.as_view(),      name="status"),
+    path("java/detect/",                    views.JavaDetectView.as_view(),  name="java_detect"),
     path("<slug:slug>/access/",             server_access,                   name="server_access"),
 
     # Server config (fáze 4)

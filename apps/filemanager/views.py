@@ -147,13 +147,17 @@ def file_browser(request, slug):
             try:
                 stat = item.stat()
                 size = stat.st_size
+                from datetime import datetime
+                modified = datetime.fromtimestamp(stat.st_mtime)
             except OSError:
                 size = 0
+                modified = None
             entries.append({
-                "name":   item.name,
-                "rel":    item_rel,
-                "is_dir": item.is_dir(),
-                "size":   size,
+                "name":     item.name,
+                "rel":      item_rel,
+                "is_dir":   item.is_dir(),
+                "size":     size,
+                "modified": modified,
                 "editable": (
                     item.is_file() and
                     item.suffix.lower() in TEXT_EXTENSIONS and

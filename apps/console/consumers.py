@@ -60,6 +60,9 @@ class ServerConsumer(AsyncWebsocketConsumer):
         await self.accept()
         logger.info("WS connect: user=%s server=%s", self.user, self.slug)
 
+        # Spusť file-tailer pokud server běží (přežije Django reload)
+        await database_sync_to_async(self._ensure_tailer)()
+
         # Pošleme posledních N řádků konzole jako "replay"
         await self._send_console_history()
 
@@ -175,6 +178,16 @@ class ServerConsumer(AsyncWebsocketConsumer):
 
     async def _send_error(self, message: str):
         await self.send(text_data=json.dumps({"type": "error", "message": message}))
+
+    def _ensure_tailer(self):
+        """Spustí file-tailer pokud server běží a tailer ještě neběží."""
+        try:
+            from apps.servers.models import ServerStatus
+            from apps.control.backends.subprocess_backend import ensure_tailer
+            if self.server.status in (ServerStatus.ONLINE, ServerStatus.STARTING):
+                ensure_tailer(self.server)
+        except Exception as e:
+            logger.debug("ensure_tailer: %s", e)
 
     @database_sync_to_async
     def _get_server(self, slug: str):

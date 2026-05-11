@@ -166,12 +166,6 @@ label { font-size:12px; color:var(--text-dim); }
         <label>Stop příkaz (pošle se do konzole)</label>
         {{ form.stop_command }}
       </div>
-      <div class="field-group">
-        <label>tmux session name</label>
-        {{ form.tmux_session_name }}
-        <div class="field-hint">{{ form.tmux_session_name.help_text }}</div>
-        {% if form.tmux_session_name.errors %}<div class="field-error">{{ form.tmux_session_name.errors.0 }}</div>{% endif %}
-      </div>
       <div class="field-group span2">
         <label>Cesta k log souboru</label>
         <div class="path-row">
