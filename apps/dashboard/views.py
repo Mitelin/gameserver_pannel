@@ -194,6 +194,14 @@ def server_status_api(request, slug):
             players = server.process_state.last_player_count
         except Exception:
             pass
+        disk_used = disk_free = disk_total = None
+        try:
+            import psutil as _ps
+            d = _ps.disk_usage(server.working_directory)
+            disk_used, disk_free, disk_total = d.used, d.free, d.total
+        except Exception:
+            pass
+
         return JsonResponse({
             "status":      info.status,
             "pid":         info.pid,
@@ -201,6 +209,9 @@ def server_status_api(request, slug):
             "ram_bytes":   info.rss_bytes,
             "players":     players,
             "threads":     info.thread_count,
+            "disk_used":   disk_used,
+            "disk_free":   disk_free,
+            "disk_total":  disk_total,
         })
     except Exception:
         return JsonResponse({"status": server.status})

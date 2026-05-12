@@ -670,51 +670,74 @@ def _scheduler_loop(stop_event: threading.Event):
 
 
 def _scheduler_trigger(sched):
-    """Spustí restart serveru dle plánu."""
-    from apps.servers.models import ServerStatus
+    """Spustí restart serveru dle plánu s varováními."""
+    import time as _time
+    from apps.servers.models import ServerStatus, Server
+    from apps.audit.models import AuditEvent
 
-    server = sched.server
-    logger.info("[scheduler] Spouštím plánovaný restart serveru %s (plán: %s)", server.slug, sched.cron_expression)
+    # Načti čerstvý stav serveru
+    server = Server.objects.get(pk=sched.server_id)
+    logger.info("[scheduler] Spouštím plánovaný restart: %s (%s)", server.slug, sched.cron_expression)
 
     backend = _get_process_backend()
 
-    # Varování před restartem
-    if sched.warn_minutes > 0 and server.status == ServerStatus.ONLINE:
-        warn_msg = f"say [SERVER] Naplánovaný restart za {sched.warn_minutes} minutu/minut!"
+    def send_warn(msg):
         try:
-            backend.send_command(server, warn_msg)
-            logger.info("[scheduler] Varování odesláno: %s", warn_msg)
+            backend.send_command(server, f"say {msg}")
         except Exception as exc:
-            logger.warning("[scheduler] Varování se nepodařilo odeslat: %s", exc)
-        # Počkáme warn_minutes (jen pokud server běží a chceme varovat)
-        # Pozn: toto zablokuje thread na warn_minutes*60 sekund.
-        # Pro krátké hodnoty (1-5 min) je to OK; pro delší zvažte jiný přístup.
-        if sched.warn_minutes <= 5:
-            import time as _time
-            _time.sleep(sched.warn_minutes * 60)
+            logger.debug("[scheduler] warn send chyba: %s", exc)
+
+    # Sada varování: [(minuty_pred, zprava), ...]
+    warn_steps = []
+    total = sched.warn_minutes
+    if total >= 10:
+        warn_steps.append((total,    f"[RESTART] Server se restartuje za {total} minut!"))
+        warn_steps.append((5,        "[RESTART] Server se restartuje za 5 minut!"))
+        warn_steps.append((1,        "[RESTART] Server se restartuje za 1 minutu!"))
+    elif total >= 5:
+        warn_steps.append((total,    f"[RESTART] Server se restartuje za {total} minut!"))
+        warn_steps.append((1,        "[RESTART] Server se restartuje za 1 minutu!"))
+    elif total > 0:
+        warn_steps.append((total,    f"[RESTART] Server se restartuje za {total} minut!"))
+
+    if warn_steps and server.status == ServerStatus.ONLINE:
+        prev_minutes = warn_steps[0][0]
+        for (minutes, msg) in warn_steps:
+            sleep_sec = (prev_minutes - minutes) * 60
+            if sleep_sec > 0:
+                _time.sleep(sleep_sec)
+            server.refresh_from_db(fields=["status"])
+            if server.status != ServerStatus.ONLINE:
+                break
+            send_warn(msg)
+            prev_minutes = minutes
+        # Spánkek na poslední minutu
+        _time.sleep(warn_steps[-1][0] * 60)
 
     # Restart
+    server.refresh_from_db(fields=["status"])
     try:
-        if server.status in (ServerStatus.ONLINE, ServerStatus.UNKNOWN):
-            backend.stop(server)
-            import time as _time
-            _time.sleep(max(server.expected_shutdown_seconds, 10))
-        backend.start(server)
-
-        from apps.audit.models import AuditEvent
+        if server.status in (ServerStatus.ONLINE, ServerStatus.UNKNOWN, ServerStatus.STARTING):
+            backend.stop_server(server)
+            _time.sleep(max(getattr(server, "expected_shutdown_seconds", 30), 15))
+        backend.start_server(server)
         AuditEvent.objects.create(
             server=server,
             event_type="server.scheduled_restart",
             severity="info",
-            message=f"Plánovaný restart dle plánu '{sched.get_label()}' ({sched.cron_expression})",
+            message=f"Plánovaný restart '{sched.get_label()}' ({sched.cron_expression})",
         )
-        logger.info("[scheduler] Restart serveru %s dokončen.", server.slug)
+        logger.info("[scheduler] Restart %s dokončen.", server.slug)
     except Exception as exc:
-        logger.error("[scheduler] Restart serveru %s selhal: %s", server.slug, exc)
+        logger.error("[scheduler] Restart %s selhal: %s", server.slug, exc)
+        AuditEvent.objects.create(
+            server=server,
+            event_type="server.scheduled_restart.failed",
+            severity="error",
+            message=str(exc),
+        )
 
-    # Aktualizuj last_triggered_at
-    from django.utils import timezone as tz
-    sched.last_triggered_at = tz.now()
+    sched.last_triggered_at = timezone.now()
     sched.save(update_fields=["last_triggered_at"])
 
 

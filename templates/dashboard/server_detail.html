@@ -165,6 +165,8 @@
       <span class="stat-value" id="v-threads">{% if process_state and process_state.thread_count_last %}{{ process_state.thread_count_last }}{% else %}–{% endif %}</span></div>
     <div class="stat"><span class="stat-label">PID</span>
       <span class="stat-value" id="v-pid" style="font-size:14px">{% if process_state and process_state.pid %}{{ process_state.pid }}{% else %}–{% endif %}</span></div>
+    <div class="stat"><span class="stat-label">Disk</span>
+      <span class="stat-value" id="v-disk" style="font-size:14px">–</span></div>
     <div class="actions">
       <button class="btn btn-start"   id="btn-start"   onclick="doAction('start')">▶ Start</button>
       <button class="btn btn-stop"    id="btn-stop"    onclick="doAction('stop')">■ Stop</button>
@@ -577,6 +579,10 @@ async function pollStatus(){
     if(d.threads     != null) setText("v-threads", d.threads);
     if(d.pid         != null) setText("v-pid",     d.pid);
     if(d.players     != null) setText("v-players", d.players);
+    if(d.disk_used   != null && d.disk_total != null){
+      const pct = (d.disk_used/d.disk_total*100).toFixed(0);
+      setText("v-disk", fmtBytes(d.disk_used)+" ("+pct+"%)");
+    }
   } catch(e){}
   setTimeout(pollStatus, 5000);
 }
