@@ -29,11 +29,12 @@ from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
 
 from apps.servers.models import Server, ServerStatus
-from apps.console.models import ConsoleLine
+from apps.console.buffer import append_console_lines, get_console_lines, touch_console_activity
 from apps.metrics.models import MetricSample
 from apps.metrics.aggregator import aggregate_to_minutes, aggregate_to_hours, run_retention_cleanup
 from apps.audit.models import AuditEvent
-from apps.control.service import _get_backend as _get_process_backend
+from apps.control.service import _get_backend as _get_process_backend, restart_server, start_server
+from apps.control.startup_probe import is_startup_ready
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +55,7 @@ HEARTBEAT_TTL = 120   # sekund – cache TTL pro heartbeat záznamy
 HEARTBEAT_CONSOLE  = "runtime.heartbeat.console"
 HEARTBEAT_METRICS  = "runtime.heartbeat.metrics"
 HEARTBEAT_WATCHDOG = "runtime.heartbeat.watchdog"
+DESIRED_STATE_RESTORE_TTL = 30
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -149,6 +151,15 @@ def _check_startup(server, lines):
 
 def _console_loop(stop_event: threading.Event):
     logger.info("Console tailer thread spuštěn.")
+    backend = _get_process_backend()
+    if not getattr(backend, "requires_terminal_session", False):
+        logger.info("Console tailer přeskočen: backend používá direct process console capture.")
+        while not stop_event.is_set():
+            cache.set(HEARTBEAT_CONSOLE, timezone.now().isoformat(), HEARTBEAT_TTL)
+            stop_event.wait(CONSOLE_INTERVAL)
+        logger.info("Console tailer thread ukončen.")
+        return
+
     channel_layer = get_channel_layer()
     tailers: dict[str, _LogTailer] = {}
 
@@ -186,18 +197,14 @@ def _console_loop(stop_event: threading.Event):
                 if not new_lines:
                     continue
 
-                ConsoleLine.objects.bulk_create([
-                    ConsoleLine(
-                        server=server, line=line,
-                        stream_type="stdout", source="log_tail",
-                    )
-                    for line in new_lines
-                ])
+                append_console_lines(
+                    server.id,
+                    [("stdout", line) for line in new_lines],
+                    source="log_tail",
+                )
 
                 try:
-                    state = server.process_state
-                    state.last_log_line_at = timezone.now()
-                    state.save(update_fields=["last_log_line_at"])
+                    touch_console_activity(server, timezone.now())
                 except Exception:
                     pass
 
@@ -294,8 +301,6 @@ def _metrics_loop(stop_event: threading.Event):
 
 def _metrics_collect(server, channel_layer, backend, now):
     info    = backend.get_process_info(server)
-    sys_cpu = psutil.cpu_percent(interval=None)
-    sys_mem = psutil.virtual_memory()
 
     disk_used = disk_free = None
     try:
@@ -317,8 +322,6 @@ def _metrics_collect(server, channel_layer, backend, now):
         timestamp          = now,
         cpu_percent        = info.cpu_percent,
         ram_bytes          = info.rss_bytes,
-        system_cpu_percent = sys_cpu,
-        system_ram_bytes   = sys_mem.used,
         thread_count       = info.thread_count,
         disk_used_bytes    = disk_used,
         disk_free_bytes    = disk_free,
@@ -394,7 +397,7 @@ def _metrics_maybe_cleanup(now, last_cleanup):
 
 def _watchdog_loop(stop_event: threading.Event):
     logger.info("Watchdog thread spuštěn.")
-    backend       = LocalTmuxProcessBackend()
+    backend       = _get_process_backend()
     channel_layer = get_channel_layer()
 
     no_players_tick = 0  # každých ~60 s  (12 × 5 s)
@@ -412,6 +415,7 @@ def _watchdog_loop(stop_event: threading.Event):
             for server in Server.objects.filter(is_active=True).select_related("process_state"):
                 try:
                     _watchdog_check(server, backend, channel_layer)
+                    _watchdog_reconcile_desired_state(server)
                     if check_no_players and server.status == ServerStatus.ONLINE:
                         from apps.alerts.engine import check_no_players_alert
                         check_no_players_alert(server)
@@ -466,7 +470,7 @@ def _watchdog_check(server, backend, channel_layer):
     state.thread_count_last = info.thread_count
     state.last_healthcheck_at = now
 
-    new_status = _watchdog_derive(server, state, info, now)
+    new_status = _watchdog_derive(server, state, info, now, backend)
 
     state.status = new_status
     state.save()
@@ -478,8 +482,18 @@ def _watchdog_check(server, backend, channel_layer):
         _watchdog_on_transition(server, old_status, new_status, channel_layer)
 
 
-def _watchdog_derive(server, state, info, now):
+def _watchdog_derive(server, state, info, now, backend):
     cur = server.status
+    session_required = getattr(backend, "requires_terminal_session", False)
+    session_alive = info.tmux_alive if session_required else bool(info.pid)
+
+    if cur in (ServerStatus.OFFLINE, ServerStatus.CRASHED) and info.pid and session_alive:
+        state.consecutive_failures = 0
+        if _watchdog_startup_confirmed(server):
+            return ServerStatus.ONLINE
+        if not state.started_at:
+            state.started_at = now
+        return ServerStatus.STARTING
 
     if cur == ServerStatus.STARTING:
         elapsed = (now - state.started_at).seconds if state.started_at else 0
@@ -489,9 +503,7 @@ def _watchdog_derive(server, state, info, now):
                 state.consecutive_failures = 0
                 return ServerStatus.ONLINE
             if elapsed > timeout:
-                logger.warning("%s: startup timeout %ds, PID existuje → ONLINE", server.slug, elapsed)
-                state.consecutive_failures = 0
-                return ServerStatus.ONLINE
+                logger.warning("%s: startup timeout %ds, proces běží ale ještě není připojitelný", server.slug, elapsed)
         else:
             if elapsed > timeout:
                 state.last_error = f"Startup timeout ({elapsed}s)"
@@ -502,7 +514,7 @@ def _watchdog_derive(server, state, info, now):
     if cur == ServerStatus.STOPPING:
         elapsed = (now - state.last_command_at).seconds if state.last_command_at else 0
         timeout = server.expected_shutdown_seconds
-        if not info.pid and not info.tmux_alive:
+        if not info.pid and not session_alive:
             state.stopped_at = now
             state.consecutive_failures = 0
             return ServerStatus.OFFLINE
@@ -513,16 +525,12 @@ def _watchdog_derive(server, state, info, now):
         return ServerStatus.STOPPING
 
     if cur == ServerStatus.ONLINE:
-        if info.pid and info.tmux_alive:
+        if info.pid and session_alive:
             state.consecutive_failures = 0
             if state.last_log_line_at:
                 silence = (now - state.last_log_line_at).seconds
-                if silence > LOG_SILENCE_CRASH and not info.pid:
-                    state.last_error = f"Log silence {silence}s + no PID"
-                    return ServerStatus.CRASHED
                 if silence > LOG_SILENCE_WARN:
-                    logger.warning("%s: log silence %ds → UNKNOWN", server.slug, silence)
-                    return ServerStatus.UNKNOWN
+                    logger.warning("%s: log silence %ds, proces ale stále běží", server.slug, silence)
             return ServerStatus.ONLINE
         else:
             state.consecutive_failures += 1
@@ -531,13 +539,13 @@ def _watchdog_derive(server, state, info, now):
             if state.consecutive_failures >= CRASH_THRESHOLD:
                 state.last_error = (
                     f"Proces zmizel po {state.consecutive_failures} selhání, "
-                    f"tmux_alive={info.tmux_alive}"
+                    f"session_alive={session_alive}"
                 )
                 return ServerStatus.CRASHED
             return ServerStatus.ONLINE
 
     if cur == ServerStatus.UNKNOWN:
-        if info.pid and info.tmux_alive:
+        if info.pid and session_alive:
             state.consecutive_failures = 0
             return ServerStatus.ONLINE
         state.consecutive_failures += 1
@@ -546,16 +554,27 @@ def _watchdog_derive(server, state, info, now):
             return ServerStatus.CRASHED
         return ServerStatus.UNKNOWN
 
-    return cur  # OFFLINE / CRASHED – nemění watchdog
+    return cur
 
 
 def _watchdog_startup_confirmed(server):
-    from apps.servers.adapters import get_adapter
-    adapter  = get_adapter(server.game_type)
-    if not adapter.startup_patterns():
-        return False
-    recent = ConsoleLine.objects.filter(server=server).order_by("-timestamp")[:50]
-    return any(adapter.is_startup_complete(line.line) for line in recent)
+    return is_startup_ready(server)
+
+
+def _watchdog_push_console_state(server, channel_layer):
+    try:
+        state = _get_process_backend().get_console_state(server) or {}
+        async_to_sync(channel_layer.group_send)(
+            f"server.{server.id}.console",
+            {
+                "type": "console.state",
+                "available": state.get("available", False),
+                "can_write": state.get("can_write", False),
+                "message": state.get("message", ""),
+            }
+        )
+    except Exception as exc:
+        logger.debug("console.state push selhal: %s", exc)
 
 
 def _watchdog_on_transition(server, old_status, new_status, channel_layer):
@@ -573,6 +592,7 @@ def _watchdog_on_transition(server, old_status, new_status, channel_layer):
         f"server.{server.id}.status",
         {"type": "server.status", "server_id": str(server.id), "status": new_status}
     )
+    _watchdog_push_console_state(server, channel_layer)
     async_to_sync(channel_layer.group_send)(
         f"server.{server.id}.events",
         {
@@ -619,6 +639,32 @@ def _watchdog_maybe_webhook(server, new_status):
         logger.warning("Webhook selhal pro %s: %s", server.slug, exc)
 
 
+def _watchdog_reconcile_desired_state(server):
+    if not server.desired_running:
+        return
+    if server.status not in (ServerStatus.OFFLINE, ServerStatus.CRASHED):
+        return
+
+    retry_key = f"desired_restore:{server.id}"
+    if cache.get(retry_key):
+        return
+    cache.set(retry_key, True, DESIRED_STATE_RESTORE_TTL)
+
+    logger.info("[%s] Obnovuji pozadovany stav: desired_running=True, status=%s", server.slug, server.status)
+    result = start_server(server, user=None)
+    if result.get("ok"):
+        AuditEvent.objects.create(
+            server=server,
+            event_type="server.restore.dispatched",
+            severity="warning",
+            message=f"Automaticka obnova pozadovaneho stavu: {result.get('message', 'start odeslan')}",
+            payload_json={"desired_running": True, "previous_status": server.status},
+        )
+        return
+
+    logger.warning("[%s] Automaticka obnova selhala: %s", server.slug, result.get("message"))
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # Scheduler (plánované restarty)
 # ══════════════════════════════════════════════════════════════════════════════
@@ -637,7 +683,7 @@ def _scheduler_loop(stop_event: threading.Event):
 
     while not stop_event.is_set():
         try:
-            now = timezone.now()
+            now = timezone.localtime()
             # Budeme porovnávat s oknem ±SCHEDULER_INTERVAL sekund aby nedošlo k vynechání při drobném zpoždění
             window = timedelta(seconds=SCHEDULER_INTERVAL)
 
@@ -718,9 +764,13 @@ def _scheduler_trigger(sched):
     server.refresh_from_db(fields=["status"])
     try:
         if server.status in (ServerStatus.ONLINE, ServerStatus.UNKNOWN, ServerStatus.STARTING):
-            backend.stop_server(server)
-            _time.sleep(max(getattr(server, "expected_shutdown_seconds", 30), 15))
-        backend.start_server(server)
+            result = restart_server(server, user=None)
+        else:
+            result = start_server(server, user=None)
+
+        if not result.get("ok"):
+            raise RuntimeError(result.get("message") or "Plánovaný restart selhal.")
+
         AuditEvent.objects.create(
             server=server,
             event_type="server.scheduled_restart",
@@ -759,7 +809,7 @@ class Command(BaseCommand):
                 time.sleep(5)
             self.stdout.write("✅ Setup wizard dokončen – spouštím workry.")
 
-        stop_event = threading.Event()
+        stop_event, threads = start_runtime_threads()
 
         # Signály musí být registrovány v hlavním threadu
         def _shutdown(signum, frame):
@@ -768,16 +818,6 @@ class Command(BaseCommand):
 
         signal.signal(signal.SIGTERM, _shutdown)
         signal.signal(signal.SIGINT,  _shutdown)
-
-        threads = [
-            threading.Thread(target=_console_loop,    args=(stop_event,), name="console-tailer",      daemon=True),
-            threading.Thread(target=_metrics_loop,    args=(stop_event,), name="metrics-collector",   daemon=True),
-            threading.Thread(target=_watchdog_loop,   args=(stop_event,), name="server-watchdog",     daemon=True),
-            threading.Thread(target=_scheduler_loop,  args=(stop_event,), name="restart-scheduler",   daemon=True),
-        ]
-
-        for t in threads:
-            t.start()
 
         self.stdout.write(
             f"Runtime worker běží ({len(threads)} threadů: "
@@ -801,3 +841,18 @@ class Command(BaseCommand):
         cache.delete(HEARTBEAT_SCHEDULER)
 
         self.stdout.write("Runtime worker ukončen.")
+
+
+def start_runtime_threads(stop_event: threading.Event | None = None):
+    stop_event = stop_event or threading.Event()
+    threads = [
+        threading.Thread(target=_console_loop,    args=(stop_event,), name="console-tailer",      daemon=True),
+        threading.Thread(target=_metrics_loop,    args=(stop_event,), name="metrics-collector",   daemon=True),
+        threading.Thread(target=_watchdog_loop,   args=(stop_event,), name="server-watchdog",     daemon=True),
+        threading.Thread(target=_scheduler_loop,  args=(stop_event,), name="restart-scheduler",   daemon=True),
+    ]
+
+    for t in threads:
+        t.start()
+
+    return stop_event, threads

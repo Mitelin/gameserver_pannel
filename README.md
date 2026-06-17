@@ -20,43 +20,120 @@ Webový panel pro správu herních serverů (Minecraft, GTNH a další).
 
 ---
 
-## Windows (testování)
+## Lokální vývoj (Windows i Linux)
 
 ### 1. Instalace
 
+**Windows:**
+
 ```powershell
-git clone <repo-url> gameserver_pannel
-cd gameserver_pannel
+git clone <repo-url> gameserver_panel
+cd gameserver_panel
 
 python -m venv .venv
-.venv\Scripts\activate
-
-pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-### 2. Databáze
+**Linux:**
+
+```bash
+git clone <repo-url> gameserver_panel
+cd gameserver_panel
+
+python3 -m venv .venv
+./.venv/bin/python -m pip install -r requirements.txt
+```
+
+### 2. `.env`
+
+Zkopíruj `.env.example` na `.env` a pro lokální běh nastav minimálně:
+
+```dotenv
+SECRET_KEY=dev-secret-change-me
+DEBUG=true
+ALLOWED_HOSTS=localhost 127.0.0.1
+USE_SQLITE=true
+USE_INMEMORY_CHANNEL_LAYER=true
+```
+
+Tohle je výchozí lokální režim bez PostgreSQL a bez Redis.
+
+### 3. Databáze
+
+**Windows:**
 
 ```powershell
-python manage.py migrate
-python manage.py createsuperuser
+.\.venv\Scripts\python.exe manage.py migrate
+.\.venv\Scripts\python.exe manage.py createsuperuser
 ```
 
-### 3. Spuštění
+**Linux:**
 
-> **Důležité:** Používej `daphne`, ne `runserver` — WebSocket nefunguje bez ASGI serveru.
+```bash
+./.venv/bin/python manage.py migrate
+./.venv/bin/python manage.py createsuperuser
+```
+
+### 4. Start skripty
+
+Repo obsahuje jednotný launcher `scripts/dev.py` a dva wrappery:
+
+| Platforma | Wrapper |
+|---|---|
+| Windows | `scripts/start-dev.ps1` |
+| Linux | `scripts/start-dev.sh` |
+
+Podporované režimy:
+
+| Režim | Co dělá |
+|---|---|
+| `check` | spustí `manage.py check` |
+| `migrate` | spustí migrace |
+| `web` | spustí ASGI development server |
+| `worker` | spustí unified runtime worker |
+| `all` | spustí web a pokud je nakonfigurovaný Redis, tak i worker |
+
+**Windows:**
 
 ```powershell
-# Terminál 1 – webový server (povinné)
-.venv\Scripts\activate
-daphne -b 0.0.0.0 -p 8000 config.asgi:application
+# základní kontrola
+.\scripts\start-dev.ps1 check
 
-# Terminál 2 – worker (pro grafy, hráče, plánované restarty)
-.venv\Scripts\activate
-python manage.py run_runtime_worker
+# běžný lokální start
+.\scripts\start-dev.ps1 all
+
+# jen web na jiném portu
+.\scripts\start-dev.ps1 web --port 8001
+
+# worker zvlášť
+.\scripts\start-dev.ps1 worker
 ```
 
-Panel: **http://127.0.0.1:8000/**  
-Přihlášení: admin / (heslo z createsuperuser)
+**Linux:**
+
+```bash
+# základní kontrola
+bash ./scripts/start-dev.sh check
+
+# běžný lokální start
+bash ./scripts/start-dev.sh all
+
+# jen web na jiném portu
+bash ./scripts/start-dev.sh web --port 8001
+
+# worker zvlášť
+bash ./scripts/start-dev.sh worker
+```
+
+### 5. Jak ten start funguje
+
+- `web` používá `python manage.py runserver`, ale v tomhle projektu je to správně ASGI běh, protože je nainstalované a zaregistrované `daphne`.
+- `all` před startem spustí `manage.py check`.
+- Pokud není nastavený Redis, `all` worker přeskočí. Tím se vyhne rozbitému lokálnímu stavu, kdy by web a worker běžely v oddělených procesech nad in-memory channel layer.
+- Pokud běží lokální embedded runtime bez Redis (`USE_INMEMORY_CHANNEL_LAYER=true`), launcher automaticky přidá `--noreload`, aby se po editaci kódu neztratily live subprocess handly konzole a ovládání serveru.
+- Pro plný lokální multi-process režim nastav `REDIS_URL` a `USE_INMEMORY_CHANNEL_LAYER=false`.
+
+Panel: **http://127.0.0.1:8000/**
 
 ---
 
@@ -66,126 +143,67 @@ Přihlášení: admin / (heslo z createsuperuser)
 
 ```bash
 sudo apt update
-sudo apt install python3.11 python3.11-venv python3-pip git redis-server -y
+sudo apt install python3.11 python3.11-venv python3-pip git redis-server nginx -y
 ```
 
 ### 2. Instalace aplikace
 
 ```bash
-sudo mkdir -p /opt/gameserver_panel
-sudo chown $USER /opt/gameserver_panel
+sudo mkdir -p /srv/gameserver_panel
+sudo chown "$USER" /srv/gameserver_panel
 
-git clone <repo-url> /opt/gameserver_panel
-cd /opt/gameserver_panel
+git clone <repo-url> /srv/gameserver_panel
+cd /srv/gameserver_panel
 
 python3.11 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+./.venv/bin/python -m pip install -r requirements.txt
 ```
 
-### 3. Konfigurace
+### 3. Produkční `.env`
 
-Vytvoř soubor `config/settings_local.py`:
+Použij `.env.example` jako základ a nastav alespoň:
 
-```python
-SECRET_KEY = 'změň-na-náhodný-řetězec-min-50-znaků'
-DEBUG = False
-ALLOWED_HOSTS = ['tvoje-ip', 'tvoje-domena.cz']
-
-# Redis pro WebSocket (nutné pro produkci)
-CHANNEL_LAYERS = {
-    "default": {
-        "BACKEND": "channels_redis.core.RedisChannelLayer",
-        "CONFIG": {"hosts": [("127.0.0.1", 6379)]},
-    }
-}
+```dotenv
+SECRET_KEY=zmen-na-silny-nahodny-retezec
+DEBUG=false
+ALLOWED_HOSTS=tvoje.domena.cz tvoje-ip
+DB_NAME=gameserver_panel
+DB_USER=mcpanel
+DB_PASSWORD=silne-heslo
+DB_HOST=127.0.0.1
+DB_PORT=5432
+REDIS_URL=redis://127.0.0.1:6379/0
+USE_SQLITE=false
+USE_INMEMORY_CHANNEL_LAYER=false
 ```
 
 ### 4. Databáze
 
 ```bash
-source .venv/bin/activate
-python manage.py migrate
-python manage.py createsuperuser
+./.venv/bin/python manage.py migrate
+./.venv/bin/python manage.py createsuperuser
+./.venv/bin/python manage.py collectstatic --noinput
 ```
 
-### 5. Systemd služby
+### 5. Systemd a Nginx
 
-**Webový server** `/etc/systemd/system/gameserver-panel.service`:
+Použij připravené soubory v `deploy/`:
 
-```ini
-[Unit]
-Description=GameServer Panel (Daphne)
-After=network.target redis.service
+- `deploy/systemd/services.conf` obsahuje target, web službu a worker službu
+- `deploy/nginx/gameserver-panel.conf` obsahuje reverse proxy včetně `/ws/`
 
-[Service]
-User=www-data
-WorkingDirectory=/opt/gameserver_panel
-ExecStart=/opt/gameserver_panel/.venv/bin/daphne -b 0.0.0.0 -p 8000 config.asgi:application
-Restart=always
-RestartSec=5
-Environment=DJANGO_SETTINGS_MODULE=config.settings
+Webová služba v produkci běží přes `uvicorn config.asgi:application`, worker přes `python manage.py run_runtime_worker`.
 
-[Install]
-WantedBy=multi-user.target
-```
-
-**Worker** `/etc/systemd/system/gameserver-worker.service`:
-
-```ini
-[Unit]
-Description=GameServer Panel Worker (metriky, watchdog, scheduler)
-After=network.target redis.service gameserver-panel.service
-
-[Service]
-User=www-data
-WorkingDirectory=/opt/gameserver_panel
-ExecStart=/opt/gameserver_panel/.venv/bin/python manage.py run_runtime_worker
-Restart=always
-RestartSec=10
-Environment=DJANGO_SETTINGS_MODULE=config.settings
-
-[Install]
-WantedBy=multi-user.target
-```
-
-**Aktivace:**
+Po zkopírování jednotek a nginx konfigurace:
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable gameserver-panel gameserver-worker
-sudo systemctl start gameserver-panel gameserver-worker
-sudo systemctl status gameserver-panel
-sudo systemctl status gameserver-worker
-```
-
-### 6. Nginx (reverse proxy)
-
-```bash
-sudo apt install nginx -y
-```
-
-`/etc/nginx/sites-available/gameserver-panel`:
-
-```nginx
-server {
-    listen 80;
-    server_name tvoje-domena.cz;
-
-    location / {
-        proxy_pass http://127.0.0.1:8000;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-    }
-}
-```
-
-```bash
-sudo ln -s /etc/nginx/sites-available/gameserver-panel /etc/nginx/sites-enabled/
-sudo nginx -t && sudo systemctl reload nginx
+sudo systemctl enable gameserver-panel.target
+sudo systemctl enable gameserver-panel-web.service
+sudo systemctl enable gameserver-panel-worker.service
+sudo systemctl start gameserver-panel.target
+sudo nginx -t
+sudo systemctl reload nginx
 ```
 
 ---
@@ -225,8 +243,8 @@ java -Xms6G -Xmx6G -Dfml.readTimeout=180 @java9args.txt -jar lwjgl3ify-forgePatc
 ### Konzole
 - Živá konzole přes WebSocket — výstup serveru v reálném čase
 - Příkazy odesílané přímo do stdin procesu
-- Po restartu panelu se konzole automaticky reconnectne (file tailer)
-- Historie posledních 200 řádků při připojení
+- Po znovuotevření detailu serveru se načte uložená historie z databáze
+- U subprocess backendu je konzole čtená přímo ze stdout/stderr procesu, ne z log tailu
 
 ### Metriky (status bar)
 | Položka | Zdroj |
@@ -238,7 +256,8 @@ java -Xms6G -Xmx6G -Dfml.readTimeout=180 @java9args.txt -jar lwjgl3ify-forgePatc
 | PID | Java proces (ne cmd.exe wrapper) |
 | Disk | psutil — využití disku working directory |
 
-> Grafy (historické metriky) vyžadují běžící `run_runtime_worker`.
+> Grafy, plánované restarty a část runtime automatiky vyžadují běžící `run_runtime_worker`.
+> V lokálním multi-process režimu pro živé worker eventy používej Redis, ne in-memory channel layer.
 
 ### Plánované restarty
 
@@ -319,12 +338,12 @@ Hráči dostanou varování 5 minut a 1 minutu předem.
 
 | Problém | Příčina | Řešení |
 |---|---|---|
-| WebSocket 404 | `runserver` místo `daphne` | Použij `daphne -b 0.0.0.0 -p 8000 config.asgi:application` |
-| Konzole prázdná po restartu panelu | File tailer se znovu připojí | Obnov stránku v prohlížeči |
-| CPU/RAM = – | Daphne nenačetla nový kód | Restartuj daphne, obnov stránku |
-| Grafy prázdné | Runtime worker neběží | Spusť `python manage.py run_runtime_worker` |
-| Hráči se nepočítají | Runtime worker neběží | Spusť `python manage.py run_runtime_worker` |
-| Plánované restarty nefungují | Runtime worker neběží | Spusť `python manage.py run_runtime_worker` |
-| Port 8000 obsazený | Starý process běží | `taskkill /F /IM daphne.exe` (Win) / `pkill daphne` (Linux) |
+| WebSocket 404 | start mimo ASGI flow | Použij `scripts/start-dev.ps1 web` nebo `bash ./scripts/start-dev.sh web` |
+| Konzole po reloadu neukazuje nové live eventy | web běží bez funkčního websocket připojení | Zkontroluj, že běží `web` režim a stránka ukazuje `Připojeno` |
+| Grafy prázdné | Runtime worker neběží | Spusť `scripts/start-dev.ps1 worker` nebo `bash ./scripts/start-dev.sh worker` |
+| Hráči se nepočítají | Runtime worker neběží | Spusť `scripts/start-dev.ps1 worker` nebo `bash ./scripts/start-dev.sh worker` |
+| Plánované restarty nefungují | Runtime worker neběží | Spusť `scripts/start-dev.ps1 worker` nebo `bash ./scripts/start-dev.sh worker` |
+| Worker lokálně běží, ale live eventy se nepropíšou do webu | používá se in-memory channel layer bez Redis | Nastav `REDIS_URL` a `USE_INMEMORY_CHANNEL_LAYER=false`, nebo spusť jen `web` |
+| Port 8000 obsazený | starý process běží | Ukonči starý Python/Daphne/Uvicorn process a spusť start skript znovu |
 | Server se nezastaví | Proces neodpovídá | Použij **✕ Force** v panelu |
 | GTNH se zasekne při startu | Chybí world složka nebo RWG bug | Zkopíruj world složku ze stávajícího serveru |

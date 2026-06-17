@@ -20,6 +20,7 @@ urlpatterns = [
     path("<slug:slug>/actions/restart/",    views.RestartView.as_view(),     name="restart"),
     path("<slug:slug>/actions/force-stop/", views.ForceStopView.as_view(),   name="force_stop"),
     path("<slug:slug>/console/send/",       views.SendCommandView.as_view(), name="send_command"),
+    path("<slug:slug>/console/state/",      views.ConsoleStateView.as_view(), name="console_state"),
     path("<slug:slug>/console/logtail/",    views.LogTailView.as_view(),     name="logtail"),
     path("<slug:slug>/status/",             views.StatusView.as_view(),      name="status"),
     path("java/detect/",                    views.JavaDetectView.as_view(),  name="java_detect"),
@@ -50,6 +51,8 @@ urlpatterns = [
     path("<slug:slug>/mcadmin/whitelist/remove/", mcadmin_views.whitelist_remove_view, name="whitelist_remove"),
     path("<slug:slug>/mcadmin/ban/add/",          mcadmin_views.ban_add_view,         name="ban_add"),
     path("<slug:slug>/mcadmin/ban/remove/",       mcadmin_views.ban_remove_view,      name="ban_remove"),
+    path("<slug:slug>/mcadmin/ban-ip/add/",       mcadmin_views.ip_ban_add_view,      name="ip_ban_add"),
+    path("<slug:slug>/mcadmin/ban-ip/remove/",    mcadmin_views.ip_ban_remove_view,   name="ip_ban_remove"),
 
     # Plánované restarty (fáze 7)
     path("<slug:slug>/schedule/",                      server_views.schedule_list,    name="schedule_list"),

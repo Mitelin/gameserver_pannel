@@ -26,6 +26,7 @@ USE_INMEMORY_CHANNEL_LAYER = (
 )
 
 INSTALLED_APPS = [
+    "daphne",
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -41,7 +42,7 @@ INSTALLED_APPS = [
     "apps.users",
     "apps.servers",
     "apps.console",
-    "apps.control",
+    "apps.control.apps.ControlConfig",
     "apps.audit",
     "apps.metrics",
     "apps.alerts",

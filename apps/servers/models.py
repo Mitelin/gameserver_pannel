@@ -60,6 +60,10 @@ class Server(models.Model):
     status                    = models.CharField(
         max_length=16, choices=ServerStatus.choices, default=ServerStatus.OFFLINE
     )
+    desired_running           = models.BooleanField(
+        default=False,
+        help_text="Persisted desired state. True = panel should keep this server running and restore it after crash or host restart.",
+    )
     last_seen_at              = models.DateTimeField(null=True, blank=True)
     created_at                = models.DateTimeField(auto_now_add=True)
     updated_at                = models.DateTimeField(auto_now=True)
@@ -178,11 +182,89 @@ class ScheduledRestart(models.Model):
     class Meta:
         ordering = ["cron_expression"]
 
+    WEEKDAY_ORDER = ["1", "2", "3", "4", "5", "6", "0"]
+    WEEKDAY_LABELS = {
+        "1": "Po",
+        "2": "Ut",
+        "3": "St",
+        "4": "Ct",
+        "5": "Pa",
+        "6": "So",
+        "0": "Ne",
+    }
+
     def __str__(self):
         return f"{self.server.slug} / {self.label or self.cron_expression}"
 
     def get_label(self):
         return self.label or self.cron_expression
+
+    @classmethod
+    def parse_simple_cron(cls, expr: str):
+        parts = (expr or "").strip().split()
+        if len(parts) != 5:
+            return None
+
+        minute, hour, day, month, weekday = parts
+        if day != "*" or month != "*":
+            return None
+
+        try:
+            minute_value = int(minute)
+            hour_value = int(hour)
+        except (TypeError, ValueError):
+            return None
+
+        if minute_value < 0 or minute_value > 59 or hour_value < 0 or hour_value > 23:
+            return None
+
+        if weekday == "*":
+            weekdays = list(cls.WEEKDAY_ORDER)
+        else:
+            raw_days = []
+            for item in weekday.split(","):
+                normalized = "0" if item == "7" else item
+                if normalized not in cls.WEEKDAY_LABELS:
+                    return None
+                raw_days.append(normalized)
+            weekdays = [day_value for day_value in cls.WEEKDAY_ORDER if day_value in set(raw_days)]
+
+        return {
+            "minute": minute_value,
+            "hour": hour_value,
+            "weekdays": weekdays,
+        }
+
+    def get_schedule_parts(self):
+        return self.parse_simple_cron(self.cron_expression)
+
+    def get_time_display(self) -> str:
+        parsed = self.get_schedule_parts()
+        if not parsed:
+            return "--:--"
+        return f"{parsed['hour']:02d}:{parsed['minute']:02d}"
+
+    def get_weekday_labels(self) -> list[str]:
+        parsed = self.get_schedule_parts()
+        if not parsed:
+            return []
+        return [self.WEEKDAY_LABELS[day_value] for day_value in parsed["weekdays"]]
+
+    def get_weekday_display(self) -> str:
+        labels = self.get_weekday_labels()
+        if not labels:
+            return self.cron_expression
+        if len(labels) == len(self.WEEKDAY_ORDER):
+            return "Kazdy den"
+        return ", ".join(labels)
+
+    def get_schedule_display(self) -> str:
+        parsed = self.get_schedule_parts()
+        if not parsed:
+            return self.cron_expression
+        if len(parsed["weekdays"]) == len(self.WEEKDAY_ORDER):
+            return f"Kazdy den v {self.get_time_display()}"
+        return f"{self.get_weekday_display()} v {self.get_time_display()}"
 
 
 class PlayerSession(models.Model):

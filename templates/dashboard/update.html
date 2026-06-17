@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+{% block title %}Update – GamePanel{% endblock %}
+
+{% block extra_css %}
+.update-grid{display:grid;grid-template-columns:1.2fr .8fr;gap:1rem}
+@media(max-width:900px){.update-grid{grid-template-columns:1fr}}
+.card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:1.1rem}
+.title{font-size:20px;font-weight:700;margin-bottom:.3rem}
+.sub{font-size:12px;color:var(--text-dim);margin-bottom:1rem}
+.meta{display:grid;grid-template-columns:180px 1fr;gap:.5rem .9rem;font-size:13px}
+@media(max-width:640px){.meta{grid-template-columns:1fr}}
+.meta .k{color:var(--text-dim);text-transform:uppercase;letter-spacing:.05em;font-size:11px}
+.pill{display:inline-flex;align-items:center;padding:.2rem .55rem;border-radius:99px;font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase}
+.pill.ok{background:rgba(34,197,94,.14);color:#22c55e}.pill.warn{background:rgba(245,158,11,.14);color:#f59e0b}.pill.err{background:rgba(239,68,68,.14);color:#ef4444}
+.btn-update{display:inline-flex;align-items:center;justify-content:center;border:none;border-radius:var(--radius);padding:.7rem 1rem;background:var(--accent);color:#fff;font-weight:700;cursor:pointer}
+.btn-update[disabled]{opacity:.55;cursor:not-allowed}
+.note{margin-top:1rem;padding:.75rem .85rem;border-radius:var(--radius);background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.22);font-size:12px;color:#d8c48f}
+.commit-list{margin-top:.75rem;display:flex;flex-direction:column;gap:.35rem}
+.commit{font-family:var(--font-mono);font-size:12px;color:#b7c0dd;background:rgba(0,0,0,.16);padding:.45rem .55rem;border-radius:4px}
+.log{margin-top:.8rem;background:#0b0d14;border:1px solid var(--border);border-radius:var(--radius);padding:.8rem;min-height:220px;max-height:420px;overflow:auto;font-family:var(--font-mono);font-size:12px;white-space:pre-wrap;color:#b8c4e0}
+{% endblock %}
+
+{% block content %}
+<div class="title">UPDATE</div>
+<div class="sub">Kontrola nove verze z gitu, instalace zavislosti a refresh GamePanelu pro testovaci Linux nasazeni.</div>
+
+<div class="update-grid">
+  <div class="card">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:1rem;margin-bottom:1rem;flex-wrap:wrap">
+      <div>
+        {% if update_info.update_available %}
+          <span class="pill warn">Nova verze k dispozici</span>
+        {% elif update_info.check_error %}
+          <span class="pill err">Kontrola selhala</span>
+        {% else %}
+          <span class="pill ok">Aktualni verze</span>
+        {% endif %}
+      </div>
+      <form method="post">
+        {% csrf_token %}
+        <button class="btn-update" type="submit" {% if update_state.running or not update_info.supported or not update_info.git_available %}disabled{% endif %}>Spustit update</button>
+      </form>
+    </div>
+
+    <div class="meta">
+      <div class="k">Platforma</div>
+      <div>{% if update_info.supported %}Linux update podporovan{% else %}Update workflow urceny jen pro Linux{% endif %}</div>
+
+      <div class="k">Repo adresar</div>
+      <div>{{ update_info.root }}</div>
+
+      <div class="k">Branch</div>
+      <div>{{ update_info.branch|default:"-" }}</div>
+
+      <div class="k">Local commit</div>
+      <div>{{ update_info.local_short|default:"-" }}{% if update_info.local_head %} <span style="color:var(--text-dim)">{{ update_info.local_head }}</span>{% endif %}</div>
+
+      <div class="k">Remote commit</div>
+      <div>{{ update_info.remote_short|default:"-" }}{% if update_info.remote_head %} <span style="color:var(--text-dim)">{{ update_info.remote_head }}</span>{% endif %}</div>
+
+      <div class="k">Ahead / Behind</div>
+      <div>{{ update_info.ahead }} / {{ update_info.behind }}</div>
+
+      <div class="k">Restart plan</div>
+      <div>
+        {% if update_info.restart_plan.mode == 'custom' %}
+          Custom command
+        {% elif update_info.restart_plan.mode == 'systemd' %}
+          systemd: {{ update_info.restart_plan.worker_service }} + {{ update_info.restart_plan.web_service }}
+        {% else %}
+          Zadny automaticky restart neni nakonfigurovan.
+        {% endif %}
+      </div>
+    </div>
+
+    {% if update_info.check_error %}
+      <div class="note">Kontrola gitu selhala: {{ update_info.check_error }}</div>
+    {% endif %}
+
+    {% if update_info.recent_commits %}
+      <div class="commit-list">
+        {% for commit in update_info.recent_commits %}
+          <div class="commit">{{ commit }}</div>
+        {% endfor %}
+      </div>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:.75rem;flex-wrap:wrap;margin-bottom:.8rem">
+      <strong>Posledni update stav</strong>
+      {% if update_state.running %}
+        <span class="pill warn">Bezi</span>
+      {% elif update_state.status == 'completed' or update_state.status == 'noop' %}
+        <span class="pill ok">{{ update_state.status }}</span>
+      {% else %}
+        <span class="pill err">{{ update_state.status|default:"idle" }}</span>
+      {% endif %}
+    </div>
+
+    <div class="meta">
+      <div class="k">Zprava</div>
+      <div>{{ update_state.message|default:"-" }}</div>
+      <div class="k">Start</div>
+      <div>{{ update_state.started_at|default:"-" }}</div>
+      <div class="k">Konec</div>
+      <div>{{ update_state.finished_at|default:"-" }}</div>
+      <div class="k">PID</div>
+      <div>{{ update_state.pid|default:"-" }}</div>
+    </div>
+
+    <div class="note">
+      Ocekavany workflow: `git fetch` -> `git pull --ff-only` -> `pip install -r requirements.txt` -> `manage.py migrate` -> `collectstatic` -> restart workeru a webu.<br>
+      Pro automaticky restart na Linuxu musi mit sluzba opravneni spustit `systemctl restart`, nebo nastav `GAMEPANEL_UPDATE_RESTART_CMD`.
+    </div>
+
+    <div class="log">{% if update_log_tail %}{% for line in update_log_tail %}{{ line }}
+{% endfor %}{% else %}Zatim zadny update log.{% endif %}</div>
+  </div>
+</div>
+{% endblock %}

@@ -3,12 +3,11 @@ apps/control/backends/subprocess_backend.py
 
 SubprocessBackend – spouští servery přímo přes subprocess.Popen.
 
-stdout procesu jde přímo do log souboru (file redirect, ne PIPE).
-Konzole se čte přes WebSocket file-tailer thread – přežije Django reload.
+Web konzole čte stdout/stderr přímo z procesu.
+Poslední řádky držíme v cache/RAM bufferu pro replay po znovuotevření stránky.
 """
 import os
 import sys
-import time
 import shlex
 import logging
 import subprocess
@@ -20,6 +19,8 @@ from dataclasses import dataclass
 
 import psutil
 
+from apps.console.buffer import append_console_lines, clear_console_lines, touch_console_activity
+from apps.control.startup_probe import is_startup_ready
 from apps.servers.models import Server, ServerStatus
 
 logger = logging.getLogger(__name__)
@@ -27,11 +28,17 @@ logger = logging.getLogger(__name__)
 # slug → Popen
 _processes: dict[str, subprocess.Popen] = {}
 
-# slug → stop_event (pro file tailer)
-_tailer_stop: dict[str, threading.Event] = {}
+# slug → direct process console relay
+_console_relays: dict[str, "_ProcessConsoleRelay"] = {}
 
 # Cache psutil.Process objektů — nutné pro správné CPU měření
 _proc_cache: dict[int, psutil.Process] = {}
+
+
+def _windows_creation_flags() -> int:
+    flags = subprocess.CREATE_NEW_PROCESS_GROUP
+    flags |= getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    return flags
 
 
 def _resolve_start_command(server: Server) -> str:
@@ -46,125 +53,208 @@ def _resolve_start_command(server: Server) -> str:
     return ""
 
 
-# ── File tailer: čte log soubor a posílá do WS + DB ──────────────────────────
+# ── Direct process relay: čte stdout/stderr a posílá do WS + RAM bufferu ─────
+class _ProcessConsoleRelay:
+    MAX_BATCH_SIZE = 200
+    IDLE_WAIT = 0.2
 
-def _file_tailer(slug: str, server_id: str, log_path: str, stop_event: threading.Event):
-    """
-    Sleduje log soubor (jako tail -f) a posílá nové řádky do WebSocket skupiny.
-    Přežije Django reload – stačí ho znovu spustit při WS připojení.
-    """
-    from channels.layers import get_channel_layer
-    from asgiref.sync import async_to_sync
-    from django.utils import timezone
+    def __init__(self, server: Server, proc: subprocess.Popen):
+        self.server_pk = server.pk
+        self.server_id = str(server.id)
+        self.slug = server.slug
+        self.game_type = server.game_type
+        self.proc = proc
+        self.group = f"server.{self.server_id}.console"
+        self.stop_event = threading.Event()
+        self.queue: queue.Queue = queue.Queue()
+        self.reader_count = 0
+        self.reader_done = 0
+        self.threads: list[threading.Thread] = []
 
-    channel_layer = get_channel_layer()
-    group = f"server.{server_id}.console"
+    def start(self):
+        streams = [
+            (self.proc.stdout, "stdout"),
+            (self.proc.stderr, "stderr"),
+        ]
+        self.reader_count = sum(1 for stream, _ in streams if stream is not None)
+        for stream, stream_type in streams:
+            if stream is None:
+                continue
+            thread = threading.Thread(
+                target=self._read_stream,
+                args=(stream, stream_type),
+                daemon=True,
+                name=f"console-reader-{self.slug}-{stream_type}",
+            )
+            thread.start()
+            self.threads.append(thread)
 
-    logger.info("[%s] file_tailer spuštěn → %s", slug, log_path)
+        publisher = threading.Thread(
+            target=self._publish_loop,
+            daemon=True,
+            name=f"console-publisher-{self.slug}",
+        )
+        publisher.start()
+        self.threads.append(publisher)
+        logger.info("[%s] direct console relay spuštěn", self.slug)
 
-    fh = None
-    batch = []
+    def is_alive(self) -> bool:
+        return any(thread.is_alive() for thread in self.threads)
 
-    def flush_batch():
+    def stop(self):
+        self.stop_event.set()
+        for stream in (self.proc.stdout, self.proc.stderr):
+            if stream is None:
+                continue
+            try:
+                stream.close()
+            except Exception:
+                pass
+
+    def _read_stream(self, stream, stream_type: str):
+        try:
+            while not self.stop_event.is_set():
+                line = stream.readline()
+                if line == "":
+                    break
+                self.queue.put((stream_type, line.rstrip("\r\n")))
+        except Exception as exc:
+            logger.debug("[%s] console %s reader: %s", self.slug, stream_type, exc)
+        finally:
+            self.queue.put((None, stream_type))
+
+    def _publish_loop(self):
+        while True:
+            try:
+                item = self.queue.get(timeout=self.IDLE_WAIT)
+            except queue.Empty:
+                item = None
+
+            if item is not None:
+                batch: list[tuple[str, str]] = []
+                self._consume_queue_item(item, batch)
+                while len(batch) < self.MAX_BATCH_SIZE:
+                    try:
+                        queued_item = self.queue.get_nowait()
+                    except queue.Empty:
+                        break
+                    self._consume_queue_item(queued_item, batch)
+                if batch:
+                    self._flush_batch(batch)
+
+            if self.reader_done >= self.reader_count and self.queue.empty():
+                break
+
+            if self.stop_event.is_set() and self.queue.empty() and self.proc.poll() is not None:
+                break
+
+        _console_relays.pop(self.slug, None)
+        logger.info("[%s] direct console relay ukončen", self.slug)
+
+    def _consume_queue_item(self, item: tuple[str | None, str], batch: list[tuple[str, str]]):
+        stream_type, payload = item
+        if stream_type is None:
+            self.reader_done += 1
+            return
+        batch.append((stream_type, payload))
+
+    def _flush_batch(self, batch: list[tuple[str, str]]):
+        from asgiref.sync import async_to_sync
+        from channels.layers import get_channel_layer
+        from django.utils import timezone
+        from apps.audit.models import AuditEvent
+        from apps.servers.models import Server as Srv, ServerStatus as Status
+
         if not batch:
             return
-        try:
-            from apps.console.models import ConsoleLine
-            from apps.servers.models import Server as Srv
-            from django.db import connection
-            connection.close()
-            srv = Srv.objects.only("id").get(slug=slug)
-            ConsoleLine.objects.bulk_create([
-                ConsoleLine(server=srv, line=l, stream_type="stdout", source="subprocess")
-                for l in batch
-            ])
-        except Exception as e:
-            logger.debug("[%s] ConsoleLine flush: %s", slug, e)
-        batch.clear()
 
-    def open_file():
-        nonlocal fh
-        try:
-            fh = open(log_path, "r", encoding="utf-8", errors="replace")
-            fh.seek(0, 2)  # seek na konec – ukazuj jen nové řádky
-            return True
-        except Exception as e:
-            logger.debug("[%s] tailer open: %s", slug, e)
-            return False
+        channel_layer = get_channel_layer()
+        now = timezone.now()
+        lines_only = [line for _, line in batch]
 
-    while not stop_event.is_set():
-        # Počkej na vznik souboru
-        if fh is None:
-            if not open_file():
-                stop_event.wait(0.5)
-                continue
-
-        line = fh.readline()
-        if line:
-            line = line.rstrip("\r\n")
-            batch.append(line)
+        # Live UI má přednost před persistencí do DB.
+        for _, line in batch:
             try:
                 async_to_sync(channel_layer.group_send)(
-                    group,
+                    self.group,
                     {
-                        "type":      "console.line",
-                        "server_id": server_id,
-                        "timestamp": timezone.now().isoformat(),
-                        "line":      line,
+                        "type": "console.line",
+                        "server_id": self.server_id,
+                        "timestamp": now.isoformat(),
+                        "line": line,
                     },
                 )
-            except Exception as e:
-                logger.debug("[%s] WS push: %s", slug, e)
+            except Exception as exc:
+                logger.debug("[%s] WS push: %s", self.slug, exc)
 
-            if len(batch) >= 20:
-                flush_batch()
-        else:
-            flush_batch()
-            stop_event.wait(0.1)  # krátké čekání na nová data
+        append_console_lines(self.server_pk, batch, source="subprocess")
 
-    flush_batch()
-    if fh:
+        server = Srv.objects.select_related("process_state").get(pk=self.server_pk)
+
         try:
-            fh.close()
+            touch_console_activity(server, now)
         except Exception:
             pass
-    _tailer_stop.pop(slug, None)
-    logger.info("[%s] file_tailer ukončen", slug)
+
+        for line in lines_only:
+            try:
+                from apps.servers.player_tracker import process_line_for_players
+                process_line_for_players(server, line)
+            except Exception as exc:
+                logger.debug("player_tracker chyba: %s", exc)
+
+            try:
+                from apps.alerts.engine import check_log_pattern_alert
+                check_log_pattern_alert(server, line)
+            except Exception as exc:
+                logger.debug("alert engine chyba: %s", exc)
+
+        if server.status == Status.STARTING:
+            for line in lines_only:
+                if is_startup_ready(server):
+                    logger.info("[%s] Startup confirmed: %s", self.slug, line[:80])
+                    server.status = Status.ONLINE
+                    server.save(update_fields=["status", "updated_at"])
+                    try:
+                        state = server.process_state
+                        state.status = Status.ONLINE
+                        state.consecutive_failures = 0
+                        state.save(update_fields=["status", "consecutive_failures"])
+                    except Exception:
+                        pass
+                    AuditEvent.objects.create(
+                        server=server,
+                        event_type="server.start.confirmed",
+                        severity="info",
+                        message=f"Startup ready: {line[:100]}",
+                    )
+                    break
 
 
-def ensure_tailer(server: Server) -> bool:
-    """
-    Spustí file-tailer thread pokud ještě neběží.
-    Volá se při startu serveru i při každém WS připojení klienta.
-    Vrací True pokud tailer byl/je spuštěn.
-    """
-    slug = server.slug
-    log_path = server.log_file_path.strip() if server.log_file_path else ""
-    if not log_path:
-        log_path = str(Path(server.working_directory) / "panel_output.log")
+def ensure_console_capture(server: Server, proc: subprocess.Popen | None = None) -> bool:
+    relay = _console_relays.get(server.slug)
+    if relay and relay.is_alive():
+        return True
 
-    # Zkontroluj jestli tailer ještě běží
-    stop_ev = _tailer_stop.get(slug)
-    if stop_ev and not stop_ev.is_set():
-        return True  # tailer běží
+    if relay:
+        relay.stop()
+        _console_relays.pop(server.slug, None)
 
-    # Vytvoř nový stop event a spusť vlákno
-    ev = threading.Event()
-    _tailer_stop[slug] = ev
-    threading.Thread(
-        target=_file_tailer,
-        args=(slug, str(server.id), log_path, ev),
-        daemon=True, name=f"tailer-{slug}",
-    ).start()
-    logger.info("[%s] ensure_tailer: nový tailer spuštěn", slug)
+    if proc is None:
+        proc = _processes.get(server.slug)
+    if proc is None or proc.poll() is not None:
+        return False
+
+    relay = _ProcessConsoleRelay(server, proc)
+    _console_relays[server.slug] = relay
+    relay.start()
     return True
 
 
-def stop_tailer(slug: str):
-    """Zastaví file-tailer thread."""
-    ev = _tailer_stop.get(slug)
-    if ev:
-        ev.set()
+def stop_console_capture(slug: str):
+    relay = _console_relays.pop(slug, None)
+    if relay:
+        relay.stop()
 
 
 @dataclass
@@ -183,6 +273,8 @@ class SubprocessError(Exception):
 
 class SubprocessBackend:
 
+    requires_terminal_session = False
+
     def _pid_file(self, server: Server) -> Path:
         return Path(server.working_directory) / ".panel_pid"
 
@@ -191,6 +283,12 @@ class SubprocessBackend:
             self._pid_file(server).write_text(str(pid))
         except Exception as exc:
             logger.warning("Nelze uložit PID soubor pro %s: %s", server.slug, exc)
+
+    def _clear_pid(self, server: Server):
+        try:
+            self._pid_file(server).unlink(missing_ok=True)
+        except Exception as exc:
+            logger.debug("Nelze smazat PID soubor pro %s: %s", server.slug, exc)
 
     def _load_pid(self, server: Server) -> Optional[int]:
         proc = _processes.get(server.slug)
@@ -226,31 +324,18 @@ class SubprocessBackend:
         if not start_cmd:
             raise SubprocessError("Žádný start command ani aktivní profil.")
 
-        # Příprava log souboru
-        log_path = server.log_file_path.strip() if server.log_file_path else ""
-        if not log_path or Path(log_path).is_dir():
-            log_path = str(Path(workdir) / "panel_output.log")
-            server.log_file_path = log_path
-            server.save(update_fields=["log_file_path"])
-
-        # Otevři log soubor pro zápis – stdout serveru jde přímo sem
+        logger.info("[%s] Spouštím '%s' v %s", server.slug, start_cmd, workdir)
         try:
-            Path(log_path).parent.mkdir(parents=True, exist_ok=True)
-            log_fh = open(log_path, "a", encoding="utf-8", errors="replace")
-        except Exception as exc:
-            raise SubprocessError(f"Nelze otevřít log soubor: {exc}") from exc
-
-        logger.info("[%s] Spouštím '%s' v %s → %s", server.slug, start_cmd, workdir, log_path)
-        try:
+            clear_console_lines(server.id)
             if sys.platform == "win32":
                 proc = subprocess.Popen(
                     start_cmd,
                     cwd=workdir,
                     shell=True,
                     stdin=subprocess.PIPE,
-                    stdout=log_fh,
-                    stderr=subprocess.STDOUT,
-                    creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    creationflags=_windows_creation_flags(),
                     text=True,
                     encoding="utf-8",
                     errors="replace",
@@ -261,8 +346,8 @@ class SubprocessBackend:
                     shlex.split(start_cmd),
                     cwd=workdir,
                     stdin=subprocess.PIPE,
-                    stdout=log_fh,
-                    stderr=subprocess.STDOUT,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
                     start_new_session=True,
                     text=True,
                     encoding="utf-8",
@@ -270,16 +355,12 @@ class SubprocessBackend:
                     bufsize=1,
                 )
         except Exception as exc:
-            log_fh.close()
             raise SubprocessError(f"Nelze spustit server: {exc}") from exc
 
         _processes[server.slug] = proc
         self._save_pid(server, proc.pid)
 
-        # Spusť file tailer – čte log soubor a posílá do WS
-        # Dáme mu chvíli aby se soubor začal plnit
-        time.sleep(0.3)
-        ensure_tailer(server)
+        ensure_console_capture(server, proc)
 
         logger.info("[%s] Spuštěn PID %d", server.slug, proc.pid)
 
@@ -298,23 +379,19 @@ class SubprocessBackend:
             self._kill_tree(pid, "terminate")
 
     def kill_server(self, server: Server) -> None:
-        stop_tailer(server.slug)
         proc = _processes.pop(server.slug, None)
-        if proc and proc.poll() is None:
+        pid = None
+        if proc is not None:
             try:
                 pid = proc.pid
-                proc.kill()
-                self._kill_tree(pid, "kill")
-                return
             except Exception:
-                pass
-        pid = self._load_pid(server)
+                pid = None
+        if pid is None:
+            pid = self._load_pid(server)
         if pid:
             self._kill_tree(pid, "kill")
-        try:
-            self._pid_file(server).unlink(missing_ok=True)
-        except Exception:
-            pass
+        stop_console_capture(server.slug)
+        self._clear_pid(server)
 
     def _kill_tree(self, pid: int, sig: str = "terminate") -> None:
         try:
@@ -343,7 +420,41 @@ class SubprocessBackend:
                 raise SubprocessError(f"Nelze odeslat příkaz: {exc}") from exc
         raise SubprocessError("Server není spuštěný nebo nemá stdin handle (restartuj server z panelu).")
 
+    def get_console_state(self, server: Server) -> dict:
+        proc = _processes.get(server.slug)
+        relay = _console_relays.get(server.slug)
+
+        if proc is not None and proc.poll() is None and relay and relay.is_alive():
+            return {"available": True, "can_write": True, "message": "Konzole připojena."}
+
+        pid = self._load_pid(server)
+        if pid is not None:
+            if server.rcon_enabled and server.rcon_password:
+                return {
+                    "available": False,
+                    "can_write": True,
+                    "message": "Live stdout po restartu panelu není připojený. Příkazy lze dál posílat přes RCON; zobrazuji poslední log.",
+                }
+            return {
+                "available": False,
+                "can_write": False,
+                "message": "Live stdout po restartu panelu není připojený. Zobrazuji poslední log; příkazy bez RCON vyžadují restart serveru z panelu.",
+            }
+
+        return {"available": False, "can_write": False, "message": "Server je offline."}
+
     def get_process_info(self, server: Server) -> ProcessInfo:
+        proc = _processes.get(server.slug)
+        if proc is not None:
+            returncode = proc.poll()
+            if returncode is not None:
+                _processes.pop(server.slug, None)
+                stop_console_capture(server.slug)
+                self._clear_pid(server)
+                status = ServerStatus.OFFLINE if returncode == 0 else ServerStatus.CRASHED
+                return ProcessInfo(pid=None, status=status,
+                                   cpu_percent=0.0, rss_bytes=0, thread_count=0, tmux_alive=False)
+
         pid = self._load_pid(server)
         if pid is None:
             return ProcessInfo(pid=None, status=ServerStatus.OFFLINE,
@@ -389,5 +500,10 @@ class SubprocessBackend:
             )
         except psutil.NoSuchProcess:
             _processes.pop(server.slug, None)
-            return ProcessInfo(pid=None, status=ServerStatus.CRASHED,
+            stop_console_capture(server.slug)
+            self._clear_pid(server)
+            return ProcessInfo(pid=None, status=ServerStatus.OFFLINE,
                                cpu_percent=0.0, rss_bytes=0, thread_count=0, tmux_alive=False)
+
+    def ensure_console_capture(self, server: Server) -> bool:
+        return ensure_console_capture(server)

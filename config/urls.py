@@ -5,7 +5,8 @@ from django.contrib import admin
 from django.urls import path, include
 from django.contrib.auth import views as auth_views
 from apps.setup.views import settings_view, runtime_status_view, test_email_view
-from apps.servers.views import server_create
+from apps.servers.views import server_create, server_import, server_discover_api
+from apps.filemanager.views import path_picker_api
 
 urlpatterns = [
     path("admin/",    admin.site.urls),
@@ -22,6 +23,9 @@ urlpatterns = [
     path("users/",    include("apps.users.urls")),
 
     path("servers/new/", server_create, name="server_create"),
+    path("servers/import/", server_import, name="server_import"),
+    path("servers/discover/", server_discover_api, name="server_discover"),
+    path("servers/path-picker/", path_picker_api, name="path_picker"),
     path("",          include("apps.dashboard.urls")),
     path("servers/",  include("apps.control.urls")),
     path("servers/",  include("apps.metrics.urls")),

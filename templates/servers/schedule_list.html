@@ -26,8 +26,8 @@
 .btn-danger{background:rgba(239,68,68,.15);color:#ef4444;border:1px solid rgba(239,68,68,.3)}
 .btn-danger:hover{background:rgba(239,68,68,.25);text-decoration:none}
 
-code.cron{font-family:var(--font-mono);font-size:12px;background:rgba(255,255,255,.06);
-          padding:.15rem .45rem;border-radius:3px;color:#9fb3d8}
+.schedule-chip{display:inline-flex;align-items:center;font-family:var(--font-mono);font-size:12px;background:rgba(255,255,255,.06);
+               padding:.15rem .45rem;border-radius:3px;color:#9fb3d8}
 
 .empty{text-align:center;padding:2rem;color:var(--text-dim);font-size:13px}
 {% endblock %}
@@ -51,7 +51,8 @@ code.cron{font-family:var(--font-mono);font-size:12px;background:rgba(255,255,25
     <thead>
       <tr>
         <th>Popis</th>
-        <th>Cron výraz</th>
+        <th>Cas</th>
+        <th>Dny</th>
         <th>Varování</th>
         <th>Příští spuštění</th>
         <th>Poslední spuštění</th>
@@ -63,7 +64,8 @@ code.cron{font-family:var(--font-mono);font-size:12px;background:rgba(255,255,25
       {% for item in schedules %}
       <tr>
         <td>{{ item.obj.label|default:"–" }}</td>
-        <td><code class="cron">{{ item.obj.cron_expression }}</code></td>
+        <td><span class="schedule-chip">{{ item.obj.get_time_display }}</span></td>
+        <td>{{ item.obj.get_weekday_display }}</td>
         <td>{% if item.obj.warn_minutes %}{{ item.obj.warn_minutes }} min{% else %}–{% endif %}</td>
         <td style="font-family:var(--font-mono);font-size:12px">
           {% if item.next %}{{ item.next|date:"d.m.Y H:i" }}{% else %}<span style="color:var(--text-dim)">Neznámý</span>{% endif %}
@@ -100,9 +102,6 @@ code.cron{font-family:var(--font-mono);font-size:12px;background:rgba(255,255,25
 </div>
 
 <div style="margin-top:1rem;font-size:12px;color:var(--text-dim)">
-  <strong>Příklady cron výrazů:</strong>
-  <code class="cron">0 4 * * *</code> každý den ve 4:00 &nbsp;·&nbsp;
-  <code class="cron">0 */6 * * *</code> každých 6 hodin &nbsp;·&nbsp;
-  <code class="cron">0 4 * * 1</code> každé pondělí ve 4:00
+  Plany se zadavaji jako bezny cas + vybrane dny v tydnu. Cron bezi jen interne pod kapotou.
 </div>
 {% endblock %}

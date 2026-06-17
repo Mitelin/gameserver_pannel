@@ -19,6 +19,7 @@ from django.shortcuts import get_object_or_404
 
 from apps.servers.models import Server
 from apps.servers.validators import validate_server_config
+from apps.users.permissions import can_control_server, can_view_server
 from apps.control.service import (
     start_server, stop_server, restart_server,
     force_stop_server, send_console_command,
@@ -35,6 +36,11 @@ class ServerActionBase(LoginRequiredMixin, View):
     def get_server(self, slug):
         return get_object_or_404(Server, slug=slug, is_active=True)
 
+    def require_control(self, request, server):
+        if not can_control_server(request.user, server):
+            return JsonResponse({"ok": False, "message": "Přístup odepřen."}, status=403)
+        return None
+
     def json_ok(self, result):
         return JsonResponse(result, status=200 if result.get("ok") else 400)
 
@@ -49,6 +55,9 @@ class ServerActionBase(LoginRequiredMixin, View):
 class StartView(ServerActionBase):
     def post(self, request, slug):
         server = self.get_server(slug)
+        denied = self.require_control(request, server)
+        if denied:
+            return denied
         try:
             rate_limit(request, key=f"start:{slug}", max_calls=3, period=60)
         except RateLimitExceeded as e:
@@ -78,6 +87,9 @@ class StartView(ServerActionBase):
 class StopView(ServerActionBase):
     def post(self, request, slug):
         server = self.get_server(slug)
+        denied = self.require_control(request, server)
+        if denied:
+            return denied
         try:
             rate_limit(request, key=f"stop:{slug}", max_calls=5, period=60)
         except RateLimitExceeded as e:
@@ -93,6 +105,9 @@ class StopView(ServerActionBase):
 class RestartView(ServerActionBase):
     def post(self, request, slug):
         server = self.get_server(slug)
+        denied = self.require_control(request, server)
+        if denied:
+            return denied
         try:
             rate_limit(request, key=f"restart:{slug}", max_calls=2, period=120)
         except RateLimitExceeded as e:
@@ -120,6 +135,9 @@ class ForceStopView(ServerActionBase):
                 {"ok": False, "message": "Force-stop vyžaduje admin oprávnění."}, status=403
             )
         server = self.get_server(slug)
+        denied = self.require_control(request, server)
+        if denied:
+            return denied
         try:
             rate_limit(request, key=f"force:{slug}", max_calls=2, period=60)
         except RateLimitExceeded as e:
@@ -135,6 +153,9 @@ class ForceStopView(ServerActionBase):
 class SendCommandView(ServerActionBase):
     def post(self, request, slug):
         server = self.get_server(slug)
+        denied = self.require_control(request, server)
+        if denied:
+            return denied
         try:
             rate_limit(request, key=f"cmd:{slug}", max_calls=30, period=60)
         except RateLimitExceeded as e:
@@ -146,6 +167,29 @@ class SendCommandView(ServerActionBase):
             return JsonResponse({"ok": False, "message": "Neplatné tělo požadavku."}, status=400)
         result = send_console_command(server, command, user=request.user)
         return self.json_ok(result)
+
+
+class ConsoleStateView(ServerActionBase):
+    def get(self, request, slug):
+        server = self.get_server(slug)
+        if not can_view_server(request.user, server):
+            return JsonResponse({"ok": False, "message": "Přístup odepřen."}, status=403)
+
+        try:
+            from apps.control.service import backend
+            get_state = getattr(backend, "get_console_state", None)
+            if get_state is None:
+                raise RuntimeError("console_state_unavailable")
+            state = get_state(server) or {}
+            return JsonResponse({
+                "ok": True,
+                "available": state.get("available", False),
+                "can_write": state.get("can_write", False),
+                "message": state.get("message", ""),
+            })
+        except Exception as exc:
+            logger.exception("ConsoleStateView selhal pro %s", slug)
+            return JsonResponse({"ok": False, "message": str(exc)}, status=500)
 
 
 @method_decorator(require_POST, name="dispatch")
@@ -183,8 +227,7 @@ class BulkActionView(LoginRequiredMixin, View):
                 results.append({"slug": slug, "ok": False, "message": "Server nenalezen."})
                 continue
 
-            from apps.users.permissions import can_view_server
-            if not can_view_server(request.user, server):
+            if not can_control_server(request.user, server):
                 results.append({"slug": slug, "ok": False, "message": "Přístup odepřen."})
                 continue
 
@@ -282,17 +325,16 @@ class StatusView(LoginRequiredMixin, View):
 
     def get(self, request, slug):
         from apps.users.permissions import can_view_server
-        from apps.control.service import backend
+        from apps.control.service import backend, _resolve_runtime_status
         server = get_object_or_404(Server, slug=slug, is_active=True)
         if not can_view_server(request.user, server):
             return JsonResponse({"ok": False}, status=403)
 
         try:
             info = backend.get_process_info(server)
-            actual_status = info.status
+            actual_status = _resolve_runtime_status(server, info)
             # Aktualizuj DB pokud se liší
             if server.status != actual_status:
-                from apps.servers.models import ServerStatus
                 server.status = actual_status
                 server.save(update_fields=["status"])
             return JsonResponse({

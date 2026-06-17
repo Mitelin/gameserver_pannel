@@ -40,9 +40,10 @@
 .server-card{
   background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);
   padding:1.25rem;display:flex;flex-direction:column;gap:.75rem;
-  transition:border-color .15s;text-decoration:none;color:inherit
+  transition:border-color .15s,background .15s;text-decoration:none;color:inherit;cursor:pointer
 }
 .server-card:hover{border-color:#4f8ef7;text-decoration:none}
+.server-card:focus-visible{outline:2px solid #4f8ef7;outline-offset:2px}
 .card-head{display:flex;align-items:flex-start;gap:.75rem}
 .card-head h2{font-size:15px;font-weight:600;flex:1}
 .card-meta{font-size:12px;color:var(--text-dim)}
@@ -54,6 +55,7 @@
 .cs-lbl{font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.05em}
 .cs-val{font-size:13px;font-weight:600;font-variant-numeric:tabular-nums}
 .card-footer{display:flex;align-items:center;gap:.5rem;margin-top:auto}
+.card-footer-links{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap}
 .btn-manage{
   margin-left:auto;padding:.3rem .75rem;background:#4f8ef7;color:#fff;
   border-radius:var(--radius);font-size:12px;font-weight:500;text-decoration:none
@@ -108,6 +110,7 @@
   <h1 style="font-size:22px;font-weight:600">Dashboard</h1>
   {% if user.is_staff %}
   <div style="margin-left:auto;display:flex;gap:.5rem;flex-wrap:wrap">
+    <a href="/update/" style="background:rgba(255,255,255,.07);color:var(--text-dim);border:1px solid var(--border);padding:.35rem .85rem;border-radius:var(--radius);font-size:12px;font-weight:500;text-decoration:none">⬇ Update</a>
     <a href="/servers/new/" style="background:var(--accent);color:#fff;padding:.35rem .85rem;border-radius:var(--radius);font-size:12px;font-weight:600;text-decoration:none">+ Server</a>
     <a href="/servers/import/" style="background:rgba(255,255,255,.07);color:var(--text-dim);border:1px solid var(--border);padding:.35rem .85rem;border-radius:var(--radius);font-size:12px;font-weight:500;text-decoration:none">⬆ Import</a>
   </div>
@@ -160,7 +163,9 @@
 {% if servers %}
 <div class="server-grid">
   {% for server in servers %}
-  <a class="server-card" href="{% url 'dashboard:server_detail' server.slug %}" data-slug="{{ server.slug }}">
+  <article class="server-card" data-slug="{{ server.slug }}" tabindex="0"
+           onclick="window.location.href='{% url 'dashboard:server_detail' server.slug %}'"
+           onkeydown="if(event.key==='Enter' || event.key===' '){ event.preventDefault(); window.location.href='{% url 'dashboard:server_detail' server.slug %}'; }">
     <div class="card-head">
       {% if user.is_staff %}
       <input type="checkbox" class="sc-check bulk-cb" data-slug="{{ server.slug }}"
@@ -197,6 +202,7 @@
     {% endif %}
 
     <div class="card-footer">
+      <div class="card-footer-links">
       {% if server.rcon_enabled %}
         <span style="font-size:11px;color:#22c55e">RCON ✓</span>
       {% endif %}
@@ -215,9 +221,10 @@
           ⬇ Export
         </a>
       {% endif %}
+      </div>
       <span class="btn-manage">Spravovat →</span>
     </div>
-  </a>
+  </article>
   {% endfor %}
 </div>
 

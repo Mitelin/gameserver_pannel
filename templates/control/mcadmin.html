@@ -6,7 +6,8 @@
 .page-header h1{font-size:20px;font-weight:600}
 .back{color:var(--text-dim);font-size:13px;text-decoration:none}
 
-.grid{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
+.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1rem}
+@media(max-width:1080px){.grid{grid-template-columns:1fr 1fr}}
 @media(max-width:720px){.grid{grid-template-columns:1fr}}
 
 .card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:1.25rem}
@@ -103,6 +104,27 @@
     </div>
   </div>
 
+  <!-- IP Ban list -->
+  <div class="card">
+    <div class="card-title">🌐 IP Bany ({{ ip_ban_list|length }})</div>
+    <div class="add-row">
+      <input type="text" id="ipban-ip" placeholder="IP adresa" onkeydown="if(event.key==='Enter')ipBanAdd()">
+      <input type="text" id="ipban-reason" placeholder="Důvod (volitelné)">
+      <button class="btn btn-red" onclick="ipBanAdd()">Ban IP</button>
+    </div>
+    <div class="player-list" id="ipban-list-el">
+      {% for p in ip_ban_list %}
+      <div class="player-item" id="ipban-{{ p.ip|slugify }}">
+        <span class="player-name">{{ p.ip }}</span>
+        <span class="player-meta" title="{{ p.reason }}">{{ p.reason|default:'–'|truncatechars:30 }}</span>
+        <button class="btn btn-green" onclick="ipBanRemove('{{ p.ip }}')">Pardon IP</button>
+      </div>
+      {% empty %}
+      <div class="empty-list" id="ipban-empty">IP ban list je prázdný.</div>
+      {% endfor %}
+    </div>
+  </div>
+
 </div>
 {% endif %}
 
@@ -172,6 +194,34 @@ async function banRemove(name){
   const d=await post(`/servers/${SLUG}/mcadmin/ban/remove/`,{player:name});
   toast(d.message,d.ok);
   if(d.ok) document.getElementById("ban-"+name)?.remove();
+}
+
+// ── IP Ban ──
+function ipBanId(ip){ return "ipban-" + ip.replace(/[^a-zA-Z0-9_-]/g, "-"); }
+
+async function ipBanAdd(){
+  const ip=document.getElementById("ipban-ip").value.trim();
+  const reason=document.getElementById("ipban-reason").value.trim()||"Banned by admin";
+  if(!ip) return;
+  const d=await post(`/servers/${SLUG}/mcadmin/ban-ip/add/`,{ip,reason});
+  toast(d.message,d.ok);
+  if(d.ok){
+    document.getElementById("ipban-ip").value="";
+    document.getElementById("ipban-reason").value="";
+    const list=document.getElementById("ipban-list-el");
+    document.getElementById("ipban-empty")?.remove();
+    const div=document.createElement("div");
+    div.className="player-item"; div.id=ipBanId(ip);
+    div.innerHTML=`<span class="player-name">${esc(ip)}</span><span class="player-meta">${esc(reason)}</span>
+      <button class="btn btn-green" onclick="ipBanRemove('${esc(ip)}')">Pardon IP</button>`;
+    list.prepend(div);
+  }
+}
+
+async function ipBanRemove(ip){
+  const d=await post(`/servers/${SLUG}/mcadmin/ban-ip/remove/`,{ip});
+  toast(d.message,d.ok);
+  if(d.ok) document.getElementById(ipBanId(ip))?.remove();
 }
 
 function esc(s){ return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }

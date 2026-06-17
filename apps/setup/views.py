@@ -145,7 +145,7 @@ def _check_tmux() -> dict:
         return {"ok": False, "label": "tmux", "detail": "Chyba volání", "optional": True}
     except FileNotFoundError:
         return {"ok": False, "label": "tmux",
-                "detail": "Není nainstalován (nutné pro spouštění serverů)", "optional": True}
+                "detail": "Není nainstalován. Panel může použít subprocess backend, ale tmux je vhodný pro linuxový provoz.", "optional": True}
     except Exception as exc:
         return {"ok": False, "label": "tmux", "detail": str(exc), "optional": True}
 

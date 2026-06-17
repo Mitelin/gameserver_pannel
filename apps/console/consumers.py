@@ -5,7 +5,7 @@ Jeden WebSocket endpoint pro všechno:
   ws://host/ws/servers/<slug>/
 
 Multiplexuje message types:
-  • console.line      – nový řádek z log taileru
+    • console.line      – nový řádek z živé konzole
   • server.status     – změna stavu serveru
   • metrics.snapshot  – aktuální metriky (každých 10s)
   • audit.event       – systémové eventy
@@ -23,12 +23,9 @@ from channels.db import database_sync_to_async
 from django.contrib.auth.models import AnonymousUser
 
 from apps.servers.models import Server
-from apps.console.models import ConsoleLine
+from apps.users.permissions import can_control_server, can_view_server
 
 logger = logging.getLogger(__name__)
-
-CONSOLE_HISTORY_LINES = 200   # kolik posledních řádků dostat při připojení
-
 
 class ServerConsumer(AsyncWebsocketConsumer):
 
@@ -42,6 +39,10 @@ class ServerConsumer(AsyncWebsocketConsumer):
             return
 
         if not self.user.is_authenticated:
+            await self.close(code=4003)
+            return
+
+        if not await database_sync_to_async(can_view_server)(self.user, self.server):
             await self.close(code=4003)
             return
 
@@ -60,14 +61,12 @@ class ServerConsumer(AsyncWebsocketConsumer):
         await self.accept()
         logger.info("WS connect: user=%s server=%s", self.user, self.slug)
 
-        # Spusť file-tailer pokud server běží (přežije Django reload)
-        await database_sync_to_async(self._ensure_tailer)()
-
-        # Pošleme posledních N řádků konzole jako "replay"
-        await self._send_console_history()
+        # Zajisti direct console capture pokud proces běží a relay v paměti ještě neběží.
+        await database_sync_to_async(self._ensure_console_capture)()
 
         # Aktuální stav serveru
         await self._send_status_snapshot()
+        await self._send_console_state()
 
     async def disconnect(self, close_code):
         for group in getattr(self, "groups", []):
@@ -95,6 +94,15 @@ class ServerConsumer(AsyncWebsocketConsumer):
             await self._send_error(f"Neznámý typ zprávy: {msg_type}")
 
     async def _handle_command(self, command: str):
+        if not await database_sync_to_async(can_control_server)(self.user, self.server):
+            await self.send(text_data=json.dumps({
+                "type": "command.update",
+                "ok": False,
+                "message": "Přístup odepřen.",
+                "status": "FAILED",
+            }))
+            return
+
         from apps.control.service import send_console_command
         result = await database_sync_to_async(send_console_command)(
             self.server, command, self.user
@@ -111,7 +119,7 @@ class ServerConsumer(AsyncWebsocketConsumer):
     # ─────────────────────────────────────────────
 
     async def console_line(self, event):
-        """Handler pro type=console.line (z log taileru)."""
+        """Handler pro type=console.line (z živé konzole)."""
         await self.send(text_data=json.dumps({
             "type":      "console.line",
             "timestamp": event["timestamp"],
@@ -146,26 +154,17 @@ class ServerConsumer(AsyncWebsocketConsumer):
             "timestamp":  event.get("timestamp"),
         }))
 
+    async def console_state(self, event):
+        await self.send(text_data=json.dumps({
+            "type": "console.state",
+            "available": event.get("available", False),
+            "can_write": event.get("can_write", False),
+            "message": event.get("message", ""),
+        }))
+
     # ─────────────────────────────────────────────
     # Helpers
     # ─────────────────────────────────────────────
-
-    async def _send_console_history(self):
-        lines = await database_sync_to_async(self._fetch_history)()
-        for line in lines:
-            await self.send(text_data=json.dumps({
-                "type":      "console.line",
-                "timestamp": line.timestamp.isoformat(),
-                "line":      line.line,
-                "replay":    True,
-            }))
-
-    def _fetch_history(self):
-        return list(
-            ConsoleLine.objects
-            .filter(server=self.server)
-            .order_by("-timestamp")[:CONSOLE_HISTORY_LINES]
-        )[::-1]  # obrátit na chronologické pořadí
 
     async def _send_status_snapshot(self):
         server = await database_sync_to_async(
@@ -176,18 +175,39 @@ class ServerConsumer(AsyncWebsocketConsumer):
             "status": server.status,
         }))
 
+    async def _send_console_state(self):
+        state = await database_sync_to_async(self._get_console_state)()
+        await self.send(text_data=json.dumps({
+            "type": "console.state",
+            "available": state.get("available", False),
+            "can_write": state.get("can_write", False),
+            "message": state.get("message", ""),
+        }))
+
     async def _send_error(self, message: str):
         await self.send(text_data=json.dumps({"type": "error", "message": message}))
 
-    def _ensure_tailer(self):
-        """Spustí file-tailer pokud server běží a tailer ještě neběží."""
+    def _ensure_console_capture(self):
+        """Zajistí přímé čtení stdout/stderr procesu pro web konzoli."""
         try:
             from apps.servers.models import ServerStatus
-            from apps.control.backends.subprocess_backend import ensure_tailer
+            from apps.control.service import backend
             if self.server.status in (ServerStatus.ONLINE, ServerStatus.STARTING):
-                ensure_tailer(self.server)
+                ensure = getattr(backend, "ensure_console_capture", None)
+                if ensure is not None:
+                    ensure(self.server)
         except Exception as e:
-            logger.debug("ensure_tailer: %s", e)
+            logger.debug("ensure_console_capture: %s", e)
+
+    def _get_console_state(self):
+        try:
+            from apps.control.service import backend
+            get_state = getattr(backend, "get_console_state", None)
+            if get_state is not None:
+                return get_state(self.server)
+        except Exception as e:
+            logger.debug("get_console_state: %s", e)
+        return {"available": False, "can_write": False, "message": "Stav konzole se nepodařilo zjistit."}
 
     @database_sync_to_async
     def _get_server(self, slug: str):

@@ -55,8 +55,9 @@
 .ln.err   {color:#f87171}
 .ln.warn  {color:#fbbf24}
 .ln.sys   {color:#4b5580;font-style:italic}
-.ln.replay{opacity:.65}
 .console-opts{display:flex;align-items:center;gap:1rem}
+.console-state{font-size:12px;color:var(--text-dim);padding:.55rem .7rem;border:1px solid var(--border);border-radius:var(--radius);background:rgba(255,255,255,.03)}
+.console-state.err{color:#fbbf24;border-color:rgba(245,158,11,.35);background:rgba(245,158,11,.08)}
 .toggle-lbl{display:flex;align-items:center;gap:.35rem;font-size:12px;color:var(--text-dim);cursor:pointer;user-select:none}
 .toggle-lbl input{accent-color:#4f8ef7;width:14px;height:14px}
 .cmd-row{display:flex;gap:.5rem}
@@ -133,6 +134,7 @@
 <div class="quick-links" style="display:flex;flex-wrap:wrap;gap:.4rem;margin-bottom:1rem;align-items:center">
   <a class="ql" href="{% url 'dashboard:player_history' server.slug %}">👥 Hráči</a>
   <a class="ql" href="{% url 'audit:log' server.slug %}">📋 Audit log</a>
+  <a class="ql" href="{% url 'dashboard:backup_overview' server.slug %}">💾 Zálohy</a>
   {% if user.is_staff %}
   <a class="ql" href="{% url 'control:server_edit' server.slug %}">⚙ Konfigurace</a>
   <a class="ql" href="{% url 'alerts:rule_list' server.slug %}">🔔 Alerty</a>
@@ -155,7 +157,7 @@
 
   <!-- Status bar -->
   <div class="card status-bar">
-    <div class="stat"><span class="stat-label">CPU</span>
+    <div class="stat"><span class="stat-label">CPU procesu</span>
       <span class="stat-value" id="v-cpu">{% if process_state and process_state.cpu_percent_last %}{{ process_state.cpu_percent_last|floatformat:1 }}%{% else %}–{% endif %}</span></div>
     <div class="stat"><span class="stat-label">RAM</span>
       <span class="stat-value" id="v-ram">{% if process_state and process_state.rss_bytes_last %}{{ process_state.rss_bytes_last|filesizeformat }}{% else %}–{% endif %}</span></div>
@@ -186,13 +188,14 @@
       <div class="console-wrap">
         <div class="console-out" id="console-out">
           {% for line in initial_lines %}
-            <span class="ln replay">{{ line.line }}</span>
+            <span class="ln">{{ line.line }}</span>
           {% endfor %}
         </div>
+        <div class="console-state" id="console-state" style="display:none"></div>
         <div class="console-opts">
           <label class="toggle-lbl"><input type="checkbox" id="auto-scroll" checked> Auto-scroll</label>
           <label class="toggle-lbl"><input type="checkbox" id="pause-out"> Pauza</label>
-          <button class="btn btn-sm" onclick="document.getElementById('console-out').innerHTML=''">Vyčistit</button>
+          <button class="btn btn-sm" onclick="clearConsoleView()">Vyčistit</button>
           <a class="btn btn-sm" href="{% url 'dashboard:log_download' server.slug %}" style="margin-left:auto">⬇ Stáhnout log</a>
         </div>
         <div class="cmd-row">
@@ -208,15 +211,15 @@
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.5rem">
         <div class="card-title" style="margin-bottom:0">Metriky</div>
         <div class="range-tabs" id="range-tabs">
-          <button class="range-tab" onclick="loadCharts('1h')">1h</button>
+          <button class="range-tab active" onclick="loadCharts('1h')">1h</button>
           <button class="range-tab" onclick="loadCharts('3h')">3h</button>
-          <button class="range-tab active" onclick="loadCharts('24h')">24h</button>
+          <button class="range-tab" onclick="loadCharts('24h')">24h</button>
           <button class="range-tab" onclick="loadCharts('7d')">7d</button>
           <button class="range-tab" onclick="loadCharts('30d')">30d</button>
         </div>
       </div>
       <div class="charts-grid">
-        <div class="chart-card"><div class="chart-title">CPU %</div><div class="chart-wrap"><canvas id="chart-cpu"></canvas></div></div>
+        <div class="chart-card"><div class="chart-title">CPU procesu %</div><div class="chart-wrap"><canvas id="chart-cpu"></canvas></div></div>
         <div class="chart-card"><div class="chart-title">RAM (MB)</div><div class="chart-wrap"><canvas id="chart-ram"></canvas></div></div>
         <div class="chart-card"><div class="chart-title">Hráči</div><div class="chart-wrap"><canvas id="chart-players"></canvas></div></div>
         <div class="chart-card"><div class="chart-title">Vlákna</div><div class="chart-wrap"><canvas id="chart-threads"></canvas></div></div>
@@ -303,6 +306,7 @@ const CSRF   = "{{ csrf_token }}";
 const SLUG   = "{{ server.slug }}";
 const WS_URL = "{{ ws_url }}";
 const METRICS_URL = "/servers/" + SLUG + "/metrics/";
+const CONSOLE_STATE_URL = `/servers/${SLUG}/console/state/`;
 </script>
 {% endblock %}
 
@@ -313,6 +317,9 @@ const METRICS_URL = "/servers/" + SLUG + "/metrics/";
 // WebSocket
 // ══════════════════════════════════════════════════════════
 let ws = null, reconnDelay = 1000;
+let fallbackLogLoaded = false;
+let consoleWritable = true;
+let consoleStateRefreshTimer = null;
 
 function wsConnect(){
   const proto = location.protocol==="https:"?"wss":"ws";
@@ -329,6 +336,7 @@ function setWs(s){
 }
 function dispatch(m){
   if(m.type==="console.line")    appendLine(m.line, m.replay);
+  if(m.type==="console.state")   setConsoleState(m.available, m.message, m.can_write);
   if(m.type==="server.status")   setStatus(m.status);
   if(m.type==="metrics.snapshot")updateStats(m);
   if(m.type==="audit.event")     prependEvent(m);
@@ -336,29 +344,149 @@ function dispatch(m){
   if(m.type==="error")           toast(m.message, false);
 }
 
+async function refreshConsoleState(){
+  try{
+    const r = await fetch(CONSOLE_STATE_URL, {headers:{"X-CSRFToken":CSRF}});
+    if(!r.ok) return;
+    const d = await r.json();
+    if(!d.ok) return;
+    setConsoleState(d.available, d.message, d.can_write);
+  } catch(e){}
+}
+
+function scheduleConsoleStateRefresh(delay=300){
+  if(consoleStateRefreshTimer) clearTimeout(consoleStateRefreshTimer);
+  consoleStateRefreshTimer = setTimeout(()=>{
+    consoleStateRefreshTimer = null;
+    refreshConsoleState();
+  }, delay);
+}
+
+function setConsoleWriteable(canWrite){
+  consoleWritable = !!canWrite;
+  const input=document.getElementById("cmd-input");
+  const button=document.querySelector(".cmd-row .btn-send");
+  if(input) input.disabled = !consoleWritable;
+  if(button) button.disabled = !consoleWritable;
+  if(input && !consoleWritable) input.placeholder = "Příkazy nejsou po restartu panelu dostupné bez RCON";
+  if(input && consoleWritable) input.placeholder = "Příkaz → Enter";
+}
+
+async function loadLogTailFallback(){
+  if(fallbackLogLoaded) return;
+  fallbackLogLoaded = true;
+  try{
+    const r=await fetch(`/servers/${SLUG}/console/logtail/?lines=200`,{headers:{"X-CSRFToken":CSRF}});
+    const d=await r.json();
+    if(!d.ok || !Array.isArray(d.lines) || !d.lines.length) return;
+    clearConsoleView();
+    for(const line of d.lines) appendLine(line, true);
+    flushConsoleBuffer();
+  } catch(e){}
+}
+
+function setConsoleState(available, message, canWrite){
+  const box=document.getElementById("console-state");
+  if(!box) return;
+  const normalizedMessage = message || "";
+  const staleOfflineState = normalizedMessage === "Server je offline." && (_currentStatus === "ONLINE" || _currentStatus === "STARTING");
+  if(staleOfflineState){
+    scheduleConsoleStateRefresh(150);
+    return;
+  }
+  setConsoleWriteable(canWrite);
+  const isOffline = normalizedMessage === "Server je offline.";
+  if(available){
+    box.style.display="none";
+    box.textContent="";
+    box.className="console-state";
+    fallbackLogLoaded = false;
+    return;
+  }
+  box.style.display="block";
+  box.textContent=normalizedMessage || "Konzole není dostupná.";
+  box.className="console-state err";
+  if(isOffline){
+    fallbackLogLoaded = false;
+    clearConsoleView();
+    return;
+  }
+  loadLogTailFallback();
+}
+
 // ══════════════════════════════════════════════════════════
 // Console
 // ══════════════════════════════════════════════════════════
 const consoleOut=document.getElementById("console-out");
-const MAX_LINES=2000;
+const MAX_LINES=1000;
+let consoleBuffer=[];
+let consoleRenderQueued=false;
+
+function lineClass(line, replay=false){
+  let cls="ln";
+  const low=line.toLowerCase();
+  if(low.includes("error")||low.includes("exception")||low.includes("severe")||low.includes("fatal")) cls+=" err";
+  else if(low.includes("warn")) cls+=" warn";
+  else if(line.startsWith("---")||line.startsWith("[SYS]")) cls+=" sys";
+  return cls;
+}
+
+function classifyExistingConsoleLines(){
+  for(const el of consoleOut.children){
+    el.className = lineClass(el.textContent || "");
+  }
+}
+
+function flushConsoleBuffer(){
+  consoleRenderQueued=false;
+  if(!consoleBuffer.length) return;
+  const frag=document.createDocumentFragment();
+  for(const item of consoleBuffer){
+    const el=document.createElement("span");
+    el.className=lineClass(item.line, item.replay);
+    el.textContent=item.line;
+    frag.appendChild(el);
+  }
+  consoleBuffer=[];
+  consoleOut.appendChild(frag);
+  const overflow=consoleOut.children.length-MAX_LINES;
+  for(let i=0;i<overflow;i++) consoleOut.removeChild(consoleOut.firstChild);
+  if(document.getElementById("auto-scroll").checked) consoleOut.scrollTop=consoleOut.scrollHeight;
+}
 
 function appendLine(line, replay=false){
   if(document.getElementById("pause-out").checked && !replay) return;
-  const el=document.createElement("span");
-  el.className="ln"+(replay?" replay":"");
-  const low=line.toLowerCase();
-  if(low.includes("error")||low.includes("exception")) el.classList.add("err");
-  else if(low.includes("warn")) el.classList.add("warn");
-  else if(line.startsWith("---")||line.startsWith("[SYS]")) el.classList.add("sys");
-  el.textContent=line;
-  consoleOut.appendChild(el);
-  while(consoleOut.children.length>MAX_LINES) consoleOut.removeChild(consoleOut.firstChild);
-  if(document.getElementById("auto-scroll").checked) consoleOut.scrollTop=consoleOut.scrollHeight;
+  const box=document.getElementById("console-state");
+  if(box && box.textContent==="Server je offline." && (_currentStatus === "ONLINE" || _currentStatus === "STARTING")){
+    box.style.display="none";
+    box.textContent="";
+    box.className="console-state";
+    scheduleConsoleStateRefresh(50);
+  }
+  consoleBuffer.push({line,replay});
+  if(consoleRenderQueued) return;
+  consoleRenderQueued=true;
+  requestAnimationFrame(flushConsoleBuffer);
+}
+
+function appendSyntheticCommand(cmd){
+  appendLine(`[CMD] ${cmd}`, true);
+}
+
+function clearConsoleView(){
+  consoleBuffer=[];
+  consoleRenderQueued=false;
+  consoleOut.replaceChildren();
 }
 
 async function sendCmd(){
   const inp=document.getElementById("cmd-input"), cmd=inp.value.trim();
   if(!cmd) return;
+  if(!consoleWritable){
+    toast("Po restartu panelu nejsou příkazy bez RCON dostupné.", false);
+    return;
+  }
+  appendSyntheticCommand(cmd);
   if(ws && ws.readyState===1){
     ws.send(JSON.stringify({type:"console.command",command:cmd}));
   } else {
@@ -382,6 +510,7 @@ let _currentStatus = "{{ server.status }}";
 function setStatus(s){
   _currentStatus = s;
   const b=document.getElementById("status-badge");
+  const consoleState=document.getElementById("console-state");
   b.className=`badge badge-${s.toLowerCase()}`;
   b.innerHTML=`<span class="dot"></span><span>${STATUS_LBL[s]||s}</span>`;
   const canStart  = s==="OFFLINE"||s==="CRASHED";
@@ -391,6 +520,15 @@ function setStatus(s){
   q("btn-stop",    !canStop);
   q("btn-restart", !canRestart);
   const f=document.getElementById("btn-force"); if(f) f.disabled=s==="OFFLINE";
+  if(s==="OFFLINE"){
+    setConsoleState(false, "Server je offline.", false);
+  } else if(s==="STARTING" || s==="ONLINE"){
+    scheduleConsoleStateRefresh(s==="STARTING" ? 200 : 50);
+  } else if(consoleState && consoleState.textContent==="Server je offline."){
+    consoleState.style.display="none";
+    consoleState.textContent="";
+    consoleState.className="console-state";
+  }
 }
 function q(id,disabled){ const el=document.getElementById(id); if(el) el.disabled=disabled; }
 
@@ -409,6 +547,41 @@ function fmtBytes(b){
   if(b<1048576)   return (b/1024).toFixed(0)+" KB";
   if(b<1073741824)return (b/1048576).toFixed(0)+" MB";
   return (b/1073741824).toFixed(1)+" GB";
+}
+
+function applyStatusSnapshot(d){
+  if(d.status) setStatus(d.status);
+
+  const isOffline = d.status === "OFFLINE" || d.status === "CRASHED";
+  function setText(id, v){
+    const el=document.getElementById(id);
+    if(el) el.textContent=v;
+  }
+
+  if(isOffline){
+    setText("v-cpu", "–");
+    setText("v-ram", "–");
+    setText("v-threads", "–");
+    setText("v-pid", "–");
+    setText("v-players", "0");
+  } else {
+    setText("v-cpu", d.cpu_percent != null ? d.cpu_percent.toFixed(1)+"%" : "–");
+    setText("v-ram", d.ram_bytes != null ? fmtBytes(d.ram_bytes) : "–");
+    setText("v-threads", d.threads != null ? d.threads : "–");
+    setText("v-pid", d.pid != null ? d.pid : "–");
+    setText("v-players", d.players != null ? d.players : "–");
+  }
+
+  if(d.disk_used != null && d.disk_total != null){
+    const pct = (d.disk_used/d.disk_total*100).toFixed(0);
+    setText("v-disk", fmtBytes(d.disk_used)+" ("+pct+"%)");
+  } else {
+    setText("v-disk", "–");
+  }
+
+  if(isOffline){
+    clearConsoleView();
+  }
 }
 
 // ══════════════════════════════════════════════════════════
@@ -485,7 +658,9 @@ function makeChart(id, color, label, maxY=null){
 }
 
 let charts={};
-let currentRange="24h";
+let currentRange="1h";
+let chartRefreshTimer=null;
+let chartLoadInFlight=false;
 
 function initCharts(){
   charts.cpu     = makeChart("chart-cpu",     "#4f8ef7","CPU",100);
@@ -495,6 +670,8 @@ function initCharts(){
 }
 
 async function loadCharts(range){
+  if(chartLoadInFlight) return;
+  chartLoadInFlight = true;
   currentRange = range;
   document.querySelectorAll(".range-tab").forEach(t=>{
     t.classList.toggle("active", t.textContent===range);
@@ -510,6 +687,7 @@ async function loadCharts(range){
     if(labels.length===0){
       document.getElementById("charts-empty").style.display="block";
       document.getElementById("charts-loading").style.display="none";
+      chartLoadInFlight = false;
       return;
     }
 
@@ -522,6 +700,7 @@ async function loadCharts(range){
     toast("Chyba načítání grafů", false);
   }
   document.getElementById("charts-loading").style.display="none";
+  chartLoadInFlight = false;
 }
 
 function setChartData(chart, labels, data, dataMax){
@@ -534,12 +713,14 @@ function setChartData(chart, labels, data, dataMax){
 // Live push – přidá nový bod do grafů při WS snapshotu
 function pushLivePoint(m){
   if(currentRange!=="1h" && currentRange!=="3h") return;  // live jen pro krátké rozsahy
-  const now=new Date().toLocaleTimeString("cs",{hour:"2-digit",minute:"2-digit"});
+  const snapshotTs = m.timestamp ? new Date(m.timestamp) : new Date();
+  const now=snapshotTs.toLocaleTimeString("cs",{hour:"2-digit",minute:"2-digit"});
   const MAX=120;
-  function push(chart, val){
+  function push(chart, val, maxVal=null){
     if(val==null) return;
     chart.data.labels.push(now);
     chart.data.datasets[0].data.push(val);
+    chart.data.datasets[1].data.push(maxVal);
     if(chart.data.labels.length>MAX){
       chart.data.labels.shift();
       chart.data.datasets[0].data.shift();
@@ -547,10 +728,18 @@ function pushLivePoint(m){
     }
     chart.update("none");
   }
-  push(charts.cpu,     m.cpu_percent!=null?parseFloat(m.cpu_percent.toFixed(1)):null);
-  push(charts.ram,     m.ram_bytes!=null?Math.round(m.ram_bytes/1048576):null);
-  push(charts.players, m.players);
-  push(charts.threads, m.threads);
+  push(charts.cpu,     m.cpu_percent!=null?parseFloat(m.cpu_percent.toFixed(1)):null, null);
+  push(charts.ram,     m.ram_bytes!=null?Math.round(m.ram_bytes/1048576):null, null);
+  push(charts.players, m.players, null);
+  push(charts.threads, m.threads, null);
+}
+
+function scheduleChartRefresh(){
+  if(chartRefreshTimer) clearInterval(chartRefreshTimer);
+  chartRefreshTimer = setInterval(()=>{
+    if(document.hidden) return;
+    loadCharts(currentRange);
+  }, 15000);
 }
 
 // ══════════════════════════════════════════════════════════
@@ -564,6 +753,8 @@ function toast(msg, ok=true){
 
 function esc(s){ return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
 
+classifyExistingConsoleLines();
+
 // ══════════════════════════════════════════════════════════
 // Status polling – aktualizuje badge + metriky každých 5s
 // ══════════════════════════════════════════════════════════
@@ -572,17 +763,8 @@ async function pollStatus(){
     const r = await fetch(`/servers/${SLUG}/status/`);
     if(!r.ok){ setTimeout(pollStatus, 5000); return; }
     const d = await r.json();
-    try { if(d.status) setStatus(d.status); } catch(e){}
-    function setText(id, v){ const el=document.getElementById(id); if(el) el.textContent=v; }
-    if(d.cpu_percent != null) setText("v-cpu",     d.cpu_percent.toFixed(1)+"%");
-    if(d.ram_bytes   != null) setText("v-ram",     fmtBytes(d.ram_bytes));
-    if(d.threads     != null) setText("v-threads", d.threads);
-    if(d.pid         != null) setText("v-pid",     d.pid);
-    if(d.players     != null) setText("v-players", d.players);
-    if(d.disk_used   != null && d.disk_total != null){
-      const pct = (d.disk_used/d.disk_total*100).toFixed(0);
-      setText("v-disk", fmtBytes(d.disk_used)+" ("+pct+"%)");
-    }
+    applyStatusSnapshot(d);
+    refreshConsoleState();
   } catch(e){}
   setTimeout(pollStatus, 5000);
 }
@@ -592,8 +774,10 @@ async function pollStatus(){
 // ══════════════════════════════════════════════════════════
 setStatus("{{ server.status }}");
 initCharts();
-loadCharts("24h");
+loadCharts("1h");
+scheduleChartRefresh();
 wsConnect();
+refreshConsoleState();
 pollStatus();   // aktualizuje badge + metriky
 consoleOut.scrollTop = consoleOut.scrollHeight;
 </script>

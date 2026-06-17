@@ -1,19 +1,6 @@
 # apps/console/admin.py
 from django.contrib import admin
-from .models import ConsoleLine, CommandHistory
-
-
-@admin.register(ConsoleLine)
-class ConsoleLineAdmin(admin.ModelAdmin):
-    list_display  = ("server", "timestamp", "stream_type", "source", "line_preview")
-    list_filter   = ("server", "stream_type", "source")
-    search_fields = ("line",)
-    readonly_fields = ("server", "timestamp", "sequence_number")
-    ordering = ("-timestamp",)
-
-    def line_preview(self, obj):
-        return obj.line[:80]
-    line_preview.short_description = "Řádek"
+from .models import CommandHistory
 
 
 @admin.register(CommandHistory)

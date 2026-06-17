@@ -13,7 +13,6 @@ Checker se volá z watchdogu nebo jako samostatný management command.
 """
 import os
 import logging
-from datetime import timedelta
 from pathlib import Path
 
 from django.utils import timezone
@@ -40,10 +39,12 @@ def check_backup_status(server) -> dict:
     if not path.exists():
         return {"ok": False, "message": f"Backup adresář neexistuje: {backup_dir}"}
 
-    # Najdi nejnovější soubor v adresáři (rekurzivně)
+    pattern = f"{server.slug}-*.tar.gz"
+
+    # Najdi nejnovější panelovou zálohu v adresáři.
     try:
         files = sorted(
-            (f for f in path.rglob("*") if f.is_file()),
+            (f for f in path.glob(pattern) if f.is_file()),
             key=lambda f: f.stat().st_mtime,
             reverse=True,
         )
@@ -51,7 +52,7 @@ def check_backup_status(server) -> dict:
         return {"ok": False, "message": f"Přístup odepřen: {exc}"}
 
     if not files:
-        return {"ok": False, "message": "Backup adresář je prázdný."}
+        return {"ok": False, "message": "Nenalezena žádná panelová záloha."}
 
     newest      = files[0]
     mtime       = newest.stat().st_mtime

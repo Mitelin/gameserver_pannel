@@ -70,6 +70,8 @@ label { font-size:12px; color:var(--text-dim); }
 .btn-browse:hover{color:var(--text);border-color:var(--accent)}
 .path-row{display:flex;align-items:center}
 .path-row .field-input{flex:1}
+.inline-tools{display:flex;gap:.4rem;align-items:center;margin-top:.4rem}
+.discover-status{font-size:11px;color:var(--text-dim);margin-top:.35rem}
 
 .profile-list { margin-top:1rem; display:flex; flex-direction:column; gap:.5rem; }
 .profile-item {
@@ -80,6 +82,9 @@ label { font-size:12px; color:var(--text-dim); }
 .profile-item .pi-name { flex:1; font-weight:600; }
 .profile-item .pi-cmd  { font-family:var(--font-mono); font-size:11px; color:var(--text-dim); flex:2; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .profile-active { color:var(--green); font-size:11px; font-weight:700; }
+.advanced-box summary { cursor:pointer; list-style:none; font-size:13px; color:var(--text-dim); }
+.advanced-box summary::-webkit-details-marker { display:none; }
+.advanced-box[open] summary { margin-bottom:1rem; color:var(--text); }
 {% endblock %}
 
 {% block content %}
@@ -127,12 +132,6 @@ label { font-size:12px; color:var(--text-dim); }
         {% if form.name.errors %}<div class="field-error">{{ form.name.errors.0 }}</div>{% endif %}
       </div>
       <div class="field-group">
-        <label>Slug (URL)</label>
-        {{ form.slug }}
-        {% if form.slug.errors %}<div class="field-error">{{ form.slug.errors.0 }}</div>{% endif %}
-        <div class="field-hint">{{ form.slug.help_text }}</div>
-      </div>
-      <div class="field-group">
         <label>Typ hry</label>
         {{ form.game_type }}
       </div>
@@ -140,6 +139,9 @@ label { font-size:12px; color:var(--text-dim); }
         <label class="checkbox-row">
           {{ form.is_active }} Aktivní
         </label>
+      </div>
+      <div class="field-group span2">
+        <div class="field-hint">URL identifikátor, tmux session i výchozí log cesta se dopočítají automaticky z názvu a pracovního adresáře.</div>
       </div>
     </div>
   </div>
@@ -154,6 +156,10 @@ label { font-size:12px; color:var(--text-dim); }
           {{ form.working_directory }}
           <button type="button" class="btn-browse" onclick="openPicker('id_working_directory','dir')">📁 Browse</button>
         </div>
+        <div class="inline-tools">
+          <button type="button" class="btn btn-ghost" style="font-size:12px;padding:.35rem .7rem" onclick="discoverFromWorkingDir()">Auto-detekovat z adresáře</button>
+        </div>
+        <div class="discover-status" id="discover-status">Vyplní typ hry, start příkaz, log a session podle obsahu složky.</div>
         {% if form.working_directory.errors %}<div class="field-error">{{ form.working_directory.errors.0 }}</div>{% endif %}
       </div>
       <div class="field-group span2">
@@ -162,48 +168,67 @@ label { font-size:12px; color:var(--text-dim); }
         <div class="field-hint">{{ form.start_command.help_text }}</div>
         {% if form.start_command.errors %}<div class="field-error">{{ form.start_command.errors.0 }}</div>{% endif %}
       </div>
-      <div class="field-group">
-        <label>Stop příkaz (pošle se do konzole)</label>
-        {{ form.stop_command }}
-      </div>
       <div class="field-group span2">
-        <label>Cesta k log souboru</label>
-        <div class="path-row">
-          {{ form.log_file_path }}
-          <button type="button" class="btn-browse" onclick="openPicker('id_log_file_path','file')">📁 Browse</button>
-        </div>
-      </div>
-      <div class="field-group">
-        <label>Startup timeout (s)</label>
-        {{ form.expected_startup_seconds }}
-      </div>
-      <div class="field-group">
-        <label>Shutdown timeout (s)</label>
-        {{ form.expected_shutdown_seconds }}
+        <div class="field-hint">Když necháš další pole prázdná, panel použije rozumné výchozí hodnoty podle typu hry a složky serveru.</div>
       </div>
     </div>
   </div>
 
-  {# RCON #}
-  <div class="card">
-    <div class="card-title">RCON</div>
-    <div class="field-grid">
-      <div class="field-group" style="grid-column:span 2">
-        <label class="checkbox-row">{{ form.rcon_enabled }} Zapnout RCON</label>
+  <div class="card advanced-box">
+    <details>
+      <summary>Pokročilé nastavení</summary>
+      <div class="field-grid">
+        <div class="field-group">
+          <label>Slug (URL)</label>
+          {{ form.slug }}
+          {% if form.slug.errors %}<div class="field-error">{{ form.slug.errors.0 }}</div>{% endif %}
+          <div class="field-hint">{{ form.slug.help_text }}</div>
+        </div>
+        <div class="field-group">
+          <label>tmux session name</label>
+          {{ form.tmux_session_name }}
+          <div class="field-hint">Na Linuxu se odvozuje z názvu serveru. Měň jen když potřebuješ vlastní session name.</div>
+        </div>
+        <div class="field-group span2">
+          <label>Stop příkaz (pošle se do konzole)</label>
+          {{ form.stop_command }}
+        </div>
+        <div class="field-group span2">
+          <label>Cesta k log souboru</label>
+          <div class="path-row">
+            {{ form.log_file_path }}
+            <button type="button" class="btn-browse" onclick="openPicker('id_log_file_path','file')">📁 Browse</button>
+          </div>
+          <div class="field-hint">Pro Minecraft se při prázdném poli použije `logs/latest.log`, pro ostatní hry výchozí cesta podle typu.</div>
+        </div>
+        <div class="field-group">
+          <label>Startup timeout (s)</label>
+          {{ form.expected_startup_seconds }}
+          <div class="field-hint">Používá se jen watchdogem pro poznání, kdy start trvá podezřele dlouho.</div>
+        </div>
+        <div class="field-group">
+          <label>Shutdown timeout (s)</label>
+          {{ form.expected_shutdown_seconds }}
+          <div class="field-hint">Používá se jen při čekání na korektní vypnutí serveru.</div>
+        </div>
+        <div class="field-group" style="grid-column:span 2">
+          <label class="checkbox-row">{{ form.rcon_enabled }} Použít RCON</label>
+          <div class="field-hint">Pro Minecraft Java se zkusí načíst automaticky ze `server.properties`. Když není nastavené, panel doplní localhost a port 25575.</div>
+        </div>
+        <div class="field-group">
+          <label>RCON host</label>
+          {{ form.rcon_host }}
+        </div>
+        <div class="field-group">
+          <label>RCON port</label>
+          {{ form.rcon_port }}
+        </div>
+        <div class="field-group span2">
+          <label>RCON heslo</label>
+          {{ form.rcon_password }}
+        </div>
       </div>
-      <div class="field-group">
-        <label>RCON host</label>
-        {{ form.rcon_host }}
-      </div>
-      <div class="field-group">
-        <label>RCON port</label>
-        {{ form.rcon_port }}
-      </div>
-      <div class="field-group span2">
-        <label>RCON heslo</label>
-        {{ form.rcon_password }}
-      </div>
-    </div>
+    </details>
   </div>
 
   {# Zálohy #}
@@ -216,7 +241,7 @@ label { font-size:12px; color:var(--text-dim); }
           {{ form.backup_directory }}
           <button type="button" class="btn-browse" onclick="openPicker('id_backup_directory','dir')">📁 Browse</button>
         </div>
-        <div class="field-hint">Pokud je nastaven, watchdog kontroluje stáří souborů v tomto adresáři.</div>
+        <div class="field-hint">Když pole necháš prázdné, použije se automaticky pracovní adresář serveru.</div>
         {% if form.backup_directory.errors %}<div class="field-error">{{ form.backup_directory.errors.0 }}</div>{% endif %}
       </div>
       <div class="field-group">
@@ -225,9 +250,8 @@ label { font-size:12px; color:var(--text-dim); }
         <div class="field-hint">Alert pokud je poslední záloha starší.</div>
       </div>
       <div class="field-group">
-        <label>Počet záloh k uchování (rotace)</label>
-        {{ form.backup_keep_count }}
-        <div class="field-hint">{{ form.backup_keep_count.help_text }}</div>
+        <label>Rotace záloh</label>
+        <div class="field-hint">Automatická 4úrovňová rotace: 8 intradenních po 3 hodinách, 7 denních, 4 týdenní po 7 dnech a 12 měsíčních z posledního dne v měsíci. Nejstarší zálohy nad limit se průběžně mažou.</div>
       </div>
     </div>
     {% if not is_create and server.backup_directory %}
@@ -352,6 +376,8 @@ function closePicker() {
 }
 
 function ppSelect() {
+  const body = document.getElementById('pp-body');
+  if (body.dataset.virtualRoot === '1') return;
   if (_ppField) _ppField.value = _ppCurrent;
   closePicker();
 }
@@ -361,11 +387,27 @@ function ppUp() {
   if (parent) ppLoad(parent);
 }
 
+function ppEntryClick(el) {
+  const path = el.dataset.path || '';
+  const kind = el.dataset.kind || 'dir';
+  if (!path) return;
+  if (kind === 'dir') {
+    ppLoad(path);
+    return;
+  }
+  ppPickFile(path);
+}
+
+function ppBreadcrumbClick(el) {
+  const path = el.dataset.path || '';
+  if (path) ppLoad(path);
+}
+
 async function ppLoad(path) {
   const body = document.getElementById('pp-body');
   body.innerHTML = '<div style="color:var(--text-dim);font-size:13px;padding:.5rem">Načítám…</div>';
   const showFiles = _ppMode === 'file' ? '1' : '0';
-  const r = await fetch(`/servers/path-picker/?path=${encodeURIComponent(path)}&files=${showFiles}`);
+  const r = await fetch(`/servers/path-picker/?slug={{ server.slug }}&path=${encodeURIComponent(path)}&files=${showFiles}`);
   const d = await r.json();
   if (!d.ok) {
     body.innerHTML = `<div style="color:var(--red);font-size:13px;padding:.5rem">${d.message}</div>`;
@@ -375,13 +417,18 @@ async function ppLoad(path) {
   _ppCurrent = d.current;
   document.getElementById('pp-current-path').textContent = d.current;
   body.dataset.parent = d.parent || '';
+  body.dataset.virtualRoot = d.virtual_root ? '1' : '0';
 
   // Breadcrumb
   const bc = document.getElementById('pp-breadcrumb');
   bc.innerHTML = d.parts.map((p, i) =>
-    `<span class="pp-crumb" onclick="ppLoad(${JSON.stringify(p.path)})">${p.name || '/'}</span>`
+    `<span class="pp-crumb" data-path="${encodeURIComponent(p.path)}" onclick="ppBreadcrumbClick(this)">${p.name || '/'}</span>`
     + (i < d.parts.length - 1 ? '<span style="opacity:.4">/</span>' : '')
   ).join('');
+
+  bc.querySelectorAll('.pp-crumb').forEach(el => {
+    el.dataset.path = decodeURIComponent(el.dataset.path || '');
+  });
 
   // Položky
   if (!d.entries.length) {
@@ -391,19 +438,73 @@ async function ppLoad(path) {
   body.innerHTML = d.entries.map(e => {
     const icon = e.is_dir ? '📁' : '📄';
     const cls  = e.is_dir ? 'is-dir' : 'is-file';
-    const action = e.is_dir
-      ? `ppLoad(${JSON.stringify(e.path)})`
-      : `ppPickFile(${JSON.stringify(e.path)})`;
-    return `<div class="pp-entry ${cls}" onclick="${action}">
+    const kind = e.is_dir ? 'dir' : 'file';
+    return `<div class="pp-entry ${cls}" data-kind="${kind}" data-path="${encodeURIComponent(e.path)}" onclick="ppEntryClick(this)">
       <span class="pp-icon">${icon}</span>
       <span>${e.name}</span>
     </div>`;
   }).join('');
+
+  body.querySelectorAll('.pp-entry').forEach(el => {
+    el.dataset.path = decodeURIComponent(el.dataset.path || '');
+  });
 }
 
 function ppPickFile(path) {
   _ppCurrent = path;
   document.getElementById('pp-current-path').textContent = path;
+}
+
+function setDiscoverStatus(message, color) {
+  const el = document.getElementById('discover-status');
+  if (!el) return;
+  el.textContent = message;
+  el.style.color = color || 'var(--text-dim)';
+}
+
+async function discoverFromWorkingDir() {
+  const workingDir = document.getElementById('id_working_directory');
+  const path = (workingDir && workingDir.value || '').trim();
+  if (!path) {
+    setDiscoverStatus('Nejdřív vyplň pracovní adresář.', 'var(--red)');
+    return;
+  }
+
+  setDiscoverStatus('Zjišťuji konfiguraci…');
+  try {
+    const r = await fetch(`/servers/discover/?path=${encodeURIComponent(path)}`);
+    const d = await r.json();
+    if (!d.ok) {
+      setDiscoverStatus(d.message || 'Detekce selhala.', 'var(--red)');
+      return;
+    }
+
+    const s = d.suggestions || {};
+    const map = {
+      name: 'id_name',
+      slug: 'id_slug',
+      game_type: 'id_game_type',
+      working_directory: 'id_working_directory',
+      start_command: 'id_start_command',
+      stop_command: 'id_stop_command',
+      tmux_session_name: 'id_tmux_session_name',
+      log_file_path: 'id_log_file_path',
+    };
+
+    for (const [key, fieldId] of Object.entries(map)) {
+      const el = document.getElementById(fieldId);
+      if (!el || s[key] == null) continue;
+      el.value = s[key];
+    }
+
+    if (Array.isArray(d.warnings) && d.warnings.length) {
+      setDiscoverStatus(d.warnings.join(' '), 'var(--yellow)');
+    } else {
+      setDiscoverStatus(d.message || 'Detekce dokončena.', 'var(--green)');
+    }
+  } catch (e) {
+    setDiscoverStatus('Detekce selhala: ' + e, 'var(--red)');
+  }
 }
 
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closePicker(); });

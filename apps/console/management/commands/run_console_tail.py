@@ -20,7 +20,9 @@ from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
 
 from apps.servers.models import Server, ServerStatus
-from apps.console.models import ConsoleLine
+from apps.console.buffer import append_console_lines, touch_console_activity
+from apps.control.service import _get_backend
+from apps.control.startup_probe import is_startup_ready
 
 logger = logging.getLogger(__name__)
 POLL_INTERVAL = 0.25
@@ -78,6 +80,11 @@ class Command(BaseCommand):
     help = "Console tailer – fáze 4 (plná integrace)."
 
     def handle(self, *args, **options):
+        backend = _get_backend()
+        if not getattr(backend, "requires_terminal_session", False):
+            self.stdout.write("Console tailer přeskočen: subprocess backend má přímé čtení konzole.")
+            return
+
         self.stdout.write("Console tailer (fáze 4) spuštěn.")
         self._running = True
         signal.signal(signal.SIGTERM, self._shutdown)
@@ -110,18 +117,16 @@ class Command(BaseCommand):
                 new_lines = tailer.read_new_lines()
                 if not new_lines: continue
 
-                # Bulk DB insert
-                ConsoleLine.objects.bulk_create([
-                    ConsoleLine(server=server, line=line, stream_type="stdout", source="log_tail")
-                    for line in new_lines
-                ])
+                append_console_lines(
+                    server.id,
+                    [("stdout", line) for line in new_lines],
+                    source="log_tail",
+                )
 
-                # last_log_line_at
                 try:
-                    state = server.process_state
-                    state.last_log_line_at = timezone.now()
-                    state.save(update_fields=["last_log_line_at"])
-                except Exception: pass
+                    touch_console_activity(server, timezone.now())
+                except Exception:
+                    pass
 
                 # WS push
                 group = CHANNEL_GROUP.format(server_id=str(server.id))
@@ -166,11 +171,9 @@ class Command(BaseCommand):
     def _check_startup(self, server, lines):
         if server.status != ServerStatus.STARTING:
             return
-        from apps.servers.adapters import get_adapter
         from apps.audit.models import AuditEvent
-        adapter = get_adapter(server.game_type)
         for line in lines:
-            if adapter.is_startup_complete(line):
+            if is_startup_ready(server):
                 logger.info("[%s] Startup confirmed: %s", server.slug, line[:80])
                 server.status = ServerStatus.ONLINE
                 server.save(update_fields=["status", "updated_at"])

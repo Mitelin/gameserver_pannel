@@ -39,6 +39,8 @@ class LocalTmuxProcessBackend:
     Veškerý user input prochází shlex.quote() — nikdy string interpolace.
     """
 
+    requires_terminal_session = True
+
     # ──────────────────────────────
     # Privátní tmux helpery
     # ──────────────────────────────
@@ -116,6 +118,32 @@ class LocalTmuxProcessBackend:
             "send-keys", "-t", server.tmux_session_name,
             command, "C-m",
         ])
+
+    def get_console_state(self, server: Server) -> dict:
+        if not self.session_exists(server):
+            return {
+                "available": False,
+                "can_write": False,
+                "message": "Tmux session neběží.",
+            }
+        return {
+            "available": True,
+            "can_write": True,
+            "message": "Konzole připojena přes tmux.",
+        }
+
+    def get_recent_console_lines(self, server: Server, limit: int = 200) -> list[str]:
+        if not self.session_exists(server):
+            return []
+        limit = max(1, min(int(limit), 500))
+        result = self._run(
+            ["capture-pane", "-p", "-t", server.tmux_session_name, "-S", f"-{limit}"],
+            check=False,
+        )
+        if result.returncode != 0:
+            return []
+        lines = [line.rstrip("\r") for line in result.stdout.splitlines()]
+        return [line for line in lines if line.strip()]
 
     def get_process_info(self, server: Server) -> ProcessInfo:
         """

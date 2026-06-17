@@ -17,11 +17,11 @@ from asgiref.sync import async_to_sync
 from apps.servers.models import Server, ServerStatus
 from apps.metrics.models import MetricSample
 from apps.metrics.aggregator import aggregate_to_minutes, aggregate_to_hours, run_retention_cleanup
-from apps.control.backends.tmux import LocalTmuxProcessBackend
+from apps.control.service import _get_backend as _get_process_backend
 
 logger   = logging.getLogger(__name__)
 INTERVAL = 12
-backend  = LocalTmuxProcessBackend()
+backend  = _get_process_backend()
 
 _last_minute_agg = {}
 _last_hour_agg   = {}
@@ -65,8 +65,6 @@ class Command(BaseCommand):
 
 def _collect_and_save(server, channel_layer, now):
     info    = backend.get_process_info(server)
-    sys_cpu = psutil.cpu_percent(interval=None)
-    sys_mem = psutil.virtual_memory()
 
     disk_used = disk_free = None
     try:
@@ -88,8 +86,6 @@ def _collect_and_save(server, channel_layer, now):
         timestamp          = now,
         cpu_percent        = info.cpu_percent,
         ram_bytes          = info.rss_bytes,
-        system_cpu_percent = sys_cpu,
-        system_ram_bytes   = sys_mem.used,
         thread_count       = info.thread_count,
         disk_used_bytes    = disk_used,
         disk_free_bytes    = disk_free,

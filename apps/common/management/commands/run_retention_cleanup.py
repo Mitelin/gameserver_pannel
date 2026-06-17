@@ -6,7 +6,7 @@ Ruční nebo cron-based cleanup starých dat.
 Použití:
   python manage.py run_retention_cleanup
   python manage.py run_retention_cleanup --dry-run
-  python manage.py run_retention_cleanup --raw-days=3 --console-days=7
+    python manage.py run_retention_cleanup --raw-days=3 --audit-days=30
 """
 from django.core.management.base import BaseCommand
 from django.utils import timezone
@@ -20,7 +20,6 @@ class Command(BaseCommand):
         parser.add_argument("--dry-run",      action="store_true", help="Pouze zobraz co by bylo smazáno")
         parser.add_argument("--raw-days",     type=int, default=7,  help="Retention raw MetricSample (dní)")
         parser.add_argument("--minute-days",  type=int, default=60, help="Retention MetricMinute (dní)")
-        parser.add_argument("--console-days", type=int, default=14, help="Retention ConsoleLine (dní)")
         parser.add_argument("--audit-days",   type=int, default=0,  help="Retention AuditEvent (dní, 0=navždy)")
 
     def handle(self, *args, **options):
@@ -31,19 +30,16 @@ class Command(BaseCommand):
         cutoffs = {
             "MetricSample":  now - timedelta(days=options["raw_days"]),
             "MetricMinute":  now - timedelta(days=options["minute_days"]),
-            "ConsoleLine":   now - timedelta(days=options["console_days"]),
         }
         if options["audit_days"] > 0:
             cutoffs["AuditEvent"] = now - timedelta(days=options["audit_days"])
 
         from apps.metrics.models import MetricSample, MetricMinute
-        from apps.console.models import ConsoleLine
         from apps.audit.models   import AuditEvent
 
         model_map = {
             "MetricSample": MetricSample,
             "MetricMinute": MetricMinute,
-            "ConsoleLine":  ConsoleLine,
             "AuditEvent":   AuditEvent,
         }
 

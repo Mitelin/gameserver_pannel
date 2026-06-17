@@ -24,7 +24,6 @@ logger = logging.getLogger(__name__)
 # Retention limity
 RAW_RETENTION_DAYS    = 7
 MINUTE_RETENTION_DAYS = 60
-CONSOLE_RETENTION_DAYS = 14   # pro ConsoleLine (cleanup tady centrálně)
 
 
 def aggregate_to_minutes(server: Server, since=None):
@@ -152,23 +151,16 @@ def run_retention_cleanup():
 
     raw_cutoff    = now - timedelta(days=RAW_RETENTION_DAYS)
     minute_cutoff = now - timedelta(days=MINUTE_RETENTION_DAYS)
-    console_cutoff= now - timedelta(days=CONSOLE_RETENTION_DAYS)
-
     deleted_raw, _    = MetricSample.objects.filter(timestamp__lt=raw_cutoff).delete()
     deleted_min, _    = MetricMinute.objects.filter(timestamp__lt=minute_cutoff).delete()
 
-    # ConsoleLine cleanup
-    from apps.console.models import ConsoleLine
-    deleted_con, _    = ConsoleLine.objects.filter(timestamp__lt=console_cutoff).delete()
-
     logger.info(
-        "Retention cleanup: raw=%d minute=%d consoleline=%d",
-        deleted_raw, deleted_min, deleted_con,
+        "Retention cleanup: raw=%d minute=%d",
+        deleted_raw, deleted_min,
     )
     return {
         "deleted_raw":     deleted_raw,
         "deleted_minutes": deleted_min,
-        "deleted_console": deleted_con,
     }
 
 

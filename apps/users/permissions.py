@@ -22,23 +22,35 @@ def get_profile(user) -> UserProfile:
     return UserProfile.get_for(user)
 
 
+def _has_global_admin(user) -> bool:
+    if not user.is_authenticated:
+        return False
+    if getattr(user, "is_superuser", False):
+        return True
+    return get_profile(user).is_admin_or_above
+
+
 # ── Globální role checks ──────────────────────────────────────────────────────
 
 def is_owner(user) -> bool:
     if not user.is_authenticated:
         return False
+    if getattr(user, "is_superuser", False):
+        return True
     return get_profile(user).panel_role == PanelRole.OWNER
 
 
 def is_admin_or_above(user) -> bool:
     if not user.is_authenticated:
         return False
-    return get_profile(user).panel_role in (PanelRole.OWNER, PanelRole.ADMIN)
+    return _has_global_admin(user)
 
 
 def is_operator_or_above(user) -> bool:
     if not user.is_authenticated:
         return False
+    if getattr(user, "is_superuser", False):
+        return True
     return get_profile(user).panel_role in (PanelRole.OWNER, PanelRole.ADMIN, PanelRole.OPERATOR)
 
 
@@ -51,7 +63,7 @@ def _membership(user, server):
 def can_view_server(user, server) -> bool:
     if not user.is_authenticated:
         return False
-    if get_profile(user).is_admin_or_above:
+    if _has_global_admin(user):
         return True
     m = _membership(user, server)
     return m is not None and m.can_view
@@ -60,7 +72,7 @@ def can_view_server(user, server) -> bool:
 def can_control_server(user, server) -> bool:
     if not user.is_authenticated:
         return False
-    if get_profile(user).is_admin_or_above:
+    if _has_global_admin(user):
         return True
     m = _membership(user, server)
     return m is not None and m.can_control
@@ -69,7 +81,7 @@ def can_control_server(user, server) -> bool:
 def can_edit_server_config(user, server) -> bool:
     if not user.is_authenticated:
         return False
-    if get_profile(user).is_admin_or_above:
+    if _has_global_admin(user):
         return True
     m = _membership(user, server)
     return m is not None and m.can_edit_config
@@ -78,7 +90,7 @@ def can_edit_server_config(user, server) -> bool:
 def can_view_server_audit(user, server) -> bool:
     if not user.is_authenticated:
         return False
-    if get_profile(user).is_admin_or_above:
+    if _has_global_admin(user):
         return True
     m = _membership(user, server)
     return m is not None and m.can_view_audit
@@ -91,7 +103,7 @@ def accessible_servers(user, queryset=None):
         queryset = Server.objects.filter(is_active=True)
     if not user.is_authenticated:
         return queryset.none()
-    if get_profile(user).is_admin_or_above:
+    if _has_global_admin(user):
         return queryset
     ids = (
         ServerMembership.objects

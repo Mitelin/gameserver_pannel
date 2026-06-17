@@ -22,6 +22,8 @@ from apps.servers.models import Server
 
 logger = logging.getLogger(__name__)
 
+WINDOWS_DRIVE_ROOT = "__drives__"
+
 # Přípony editovatelných textových souborů
 TEXT_EXTENSIONS = {
     ".txt", ".log", ".json", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf",
@@ -30,6 +32,14 @@ TEXT_EXTENSIONS = {
 }
 MAX_EDIT_SIZE = 512 * 1024   # 512 KB — větší soubory jen ke stažení
 MAX_UPLOAD_SIZE = 64 * 1024 * 1024  # 64 MB
+
+
+def _is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
 
 
 def _resolve_safe(root: Path, rel: str) -> Path:
@@ -50,6 +60,15 @@ def _require_staff(request):
         raise Http404("Pouze správci mají přístup k file manageru.")
 
 
+def _list_windows_drives() -> list[str]:
+    drives = []
+    for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+        drive = f"{letter}:\\"
+        if Path(drive).exists():
+            drives.append(drive)
+    return drives
+
+
 @login_required
 def path_picker_api(request):
     """
@@ -62,28 +81,67 @@ def path_picker_api(request):
 
     raw = request.GET.get("path", "").strip()
     show_files = request.GET.get("files", "1") == "1"
+    slug = request.GET.get("slug", "").strip()
 
-    # Výchozí cesta – root souborového systému
+    scope_root = None
+    if slug:
+        try:
+            server = Server.objects.get(slug=slug, is_active=True)
+            scope_root = Path(server.working_directory).resolve()
+        except (Server.DoesNotExist, OSError):
+            return JsonResponse({"ok": False, "message": "Neplatný server scope."}, status=400)
+
+        if not scope_root.exists() or not scope_root.is_dir():
+            return JsonResponse({"ok": False, "message": f"Pracovní adresář serveru neexistuje: {scope_root}"}, status=400)
+
+    # Výchozí cesta – root souborového systému / seznam disků na Windows
     if not raw:
-        import sys
-        raw = "C:\\" if sys.platform == "win32" else "/"
+        if scope_root is not None:
+            raw = str(scope_root)
+        else:
+            import sys
+            raw = WINDOWS_DRIVE_ROOT if sys.platform == "win32" else "/"
+
+    if scope_root is None and raw == WINDOWS_DRIVE_ROOT:
+        drives = _list_windows_drives()
+        return JsonResponse({
+            "ok": True,
+            "current": "Počítač",
+            "parent": None,
+            "parts": [{"name": "Počítač", "path": WINDOWS_DRIVE_ROOT}],
+            "entries": [
+                {"name": drive, "path": drive, "is_dir": True}
+                for drive in drives
+            ],
+            "scope_root": None,
+            "virtual_root": True,
+        })
 
     try:
         current = Path(raw).resolve()
     except Exception:
         return JsonResponse({"ok": False, "message": "Neplatná cesta."}, status=400)
 
+    if scope_root is not None and not _is_relative_to(current, scope_root):
+        current = scope_root
+
     if not current.exists():
         # Pokud neexistuje, zkus parent
         current = current.parent if current.parent.exists() else Path(raw).parent.resolve()
+        if scope_root is not None and not _is_relative_to(current, scope_root):
+            current = scope_root
 
     if not current.is_dir():
         current = current.parent
+        if scope_root is not None and not _is_relative_to(current, scope_root):
+            current = scope_root
 
     entries = []
     try:
         for item in sorted(current.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower())):
             try:
+                if scope_root is not None and not _is_relative_to(item.resolve(), scope_root):
+                    continue
                 is_dir = item.is_dir()
                 if not is_dir and not show_files:
                     continue
@@ -105,15 +163,26 @@ def path_picker_api(request):
         parent = p.parent
         if parent == p:
             break
+        if scope_root is not None and not _is_relative_to(parent.resolve(), scope_root):
+            break
         p = parent
     parts.reverse()
+
+    parent_path = None
+    if current.parent != current:
+        if scope_root is None or _is_relative_to(current.parent.resolve(), scope_root):
+            parent_path = str(current.parent)
+    elif scope_root is None and os.name == "nt":
+        parent_path = WINDOWS_DRIVE_ROOT
 
     return JsonResponse({
         "ok":      True,
         "current": str(current),
-        "parent":  str(current.parent) if current.parent != current else None,
+        "parent":  parent_path,
         "parts":   parts,
         "entries": entries,
+        "scope_root": str(scope_root) if scope_root is not None else None,
+        "virtual_root": False,
     })
 
 

@@ -27,11 +27,12 @@ from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib.auth.decorators import login_required
 from django.contrib import messages
 from django.http import HttpResponseForbidden, JsonResponse, HttpResponse
-from django.views.decorators.http import require_POST
+from django.views.decorators.http import require_POST, require_GET
 
 from apps.users.permissions import can_edit_server_config, is_admin_or_above
 from .models import Server, StartProfile, GameType, ScheduledRestart
 from .forms import ServerForm, StartProfileForm, ScheduledRestartForm
+from .discovery import discover_server_config
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +83,20 @@ def _require_edit(request, server):
     if not can_edit_server_config(request.user, server):
         return HttpResponseForbidden("Nemáš oprávnění upravovat konfiguraci tohoto serveru.")
     return None
+
+
+@login_required
+@require_GET
+def server_discover_api(request):
+    if not is_admin_or_above(request.user):
+        return JsonResponse({"ok": False, "message": "Vyžaduje admin oprávnění."}, status=403)
+
+    working_directory = request.GET.get("path", "").strip()
+    if not working_directory:
+        return JsonResponse({"ok": False, "message": "Chybí parametr path."}, status=400)
+
+    result = discover_server_config(working_directory)
+    return JsonResponse(result, status=200 if result.get("ok") else 400)
 
 
 # ── Server create ─────────────────────────────────────────────────────────────
@@ -374,14 +389,15 @@ def schedule_list(request, slug):
         return denied
 
     from croniter import croniter
-    from datetime import datetime
+    from django.utils import timezone
 
     schedules = list(server.scheduled_restarts.all())
     # Přidej info o příším spuštění
     enriched = []
     for s in schedules:
         try:
-            nxt = croniter(s.cron_expression, datetime.now()).get_next(datetime)
+            base = timezone.localtime()
+            nxt = croniter(s.cron_expression, base).get_next(type(base))
         except Exception:
             nxt = None
         enriched.append({"obj": s, "next": nxt})
@@ -465,7 +481,7 @@ _EXPORT_FIELDS = [
     "rcon_enabled", "rcon_host", "rcon_port",
     "expected_startup_seconds", "expected_shutdown_seconds",
     "webhook_url", "webhook_on_crash", "webhook_on_start", "webhook_on_stop",
-    "backup_directory", "backup_max_age_hours",
+    "backup_directory", "backup_max_age_hours", "backup_keep_count",
 ]
 
 
@@ -485,6 +501,7 @@ def server_export(request, slug):
         {
             "name":        p.name,
             "is_active":   p.is_active,
+            "java_path":   p.java_path,
             "jar_file":    p.jar_file,
             "heap_min_mb": p.heap_min_mb,
             "heap_max_mb": p.heap_max_mb,
@@ -522,11 +539,16 @@ def server_import(request):
 
             if data and not errors:
                 # Zkontroluj povinná pole
-                required = ["name", "slug", "game_type", "working_directory",
-                            "start_command", "tmux_session_name", "log_file_path"]
+                required = ["name", "slug", "game_type", "working_directory"]
                 for field in required:
                     if not data.get(field):
                         errors.append(f"Chybí povinné pole: {field}")
+
+                profiles = data.get("start_profiles", [])
+                has_start_command = bool((data.get("start_command") or "").strip())
+                has_profiles = bool(profiles)
+                if not errors and not has_start_command and not has_profiles:
+                    errors.append("Import musí obsahovat start_command nebo alespoň jeden start profil.")
 
                 # Kontrola duplicitního slugu
                 new_slug = data.get("slug", "")
@@ -544,13 +566,13 @@ def server_import(request):
                     server = Server.objects.create(**server_data)
 
                     # Import start profilů
-                    profiles = data.get("start_profiles", [])
                     from .models import StartProfile
                     for p in profiles:
                         StartProfile.objects.create(
                             server=server,
                             name=p.get("name", "Importovaný profil"),
                             is_active=p.get("is_active", False),
+                            java_path=p.get("java_path", ""),
                             jar_file=p.get("jar_file", "server.jar"),
                             heap_min_mb=p.get("heap_min_mb", 512),
                             heap_max_mb=p.get("heap_max_mb", 2048),

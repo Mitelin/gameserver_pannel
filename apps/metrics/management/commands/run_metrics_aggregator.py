@@ -40,6 +40,5 @@ class Command(BaseCommand):
             result = run_retention_cleanup()
             self.stdout.write(
                 f"Cleanup: raw={result['deleted_raw']} "
-                f"minutes={result['deleted_minutes']} "
-                f"consolelines={result['deleted_console']}"
+                f"minutes={result['deleted_minutes']}"
             )
