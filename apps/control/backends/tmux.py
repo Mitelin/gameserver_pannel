@@ -7,6 +7,7 @@ View funkce a service vrstva NIKDY nevolají subprocess přímo.
 import subprocess
 import shlex
 import logging
+import os
 import psutil
 from dataclasses import dataclass
 from typing import Optional
@@ -16,6 +17,37 @@ from django.utils import timezone
 from apps.servers.models import Server, ServerStatus
 
 logger = logging.getLogger(__name__)
+
+SHELL_PROCESS_NAMES = {
+    "ash",
+    "bash",
+    "busybox",
+    "cmd",
+    "cmd.exe",
+    "dash",
+    "fish",
+    "ksh",
+    "mksh",
+    "powershell",
+    "powershell.exe",
+    "pwsh",
+    "sh",
+    "yash",
+    "zsh",
+}
+
+HELPER_PROCESS_NAMES = {
+    "cat",
+    "env",
+    "flock",
+    "nice",
+    "nohup",
+    "sleep",
+    "stdbuf",
+    "tail",
+    "tee",
+    "timeout",
+}
 
 
 @dataclass
@@ -32,6 +64,13 @@ class TmuxError(Exception):
     pass
 
 
+@dataclass
+class _CachedCpuSample:
+    process: psutil.Process
+    create_time: Optional[float]
+    initialized: bool = False
+
+
 class LocalTmuxProcessBackend:
     """
     Jednoduché, bezpečné rozhraní kolem tmux CLI.
@@ -40,6 +79,10 @@ class LocalTmuxProcessBackend:
     """
 
     requires_terminal_session = True
+
+    def __init__(self) -> None:
+        self._cpu_samples: dict[int, _CachedCpuSample] = {}
+        self._server_pids: dict[str, int] = {}
 
     # ──────────────────────────────
     # Privátní tmux helpery
@@ -154,6 +197,7 @@ class LocalTmuxProcessBackend:
         pid = self._find_pid(server)
 
         if pid is None:
+            self._clear_server_cpu_state(server.slug)
             return ProcessInfo(
                 pid=None,
                 status=ServerStatus.OFFLINE if not tmux_alive else ServerStatus.UNKNOWN,
@@ -165,22 +209,41 @@ class LocalTmuxProcessBackend:
 
         try:
             proc = psutil.Process(pid)
-            # První volání cpu_percent vrací 0.0 – voláme s interval=None (non-blocking)
-            cpu = proc.cpu_percent(interval=None)
-            mem = proc.memory_info()
-            threads = proc.num_threads()
+            if not proc.is_running():
+                raise psutil.NoSuchProcess(pid)
+            cpu = self._sample_cpu(server.slug, proc)
+            try:
+                mem = proc.memory_info()
+                rss_bytes = mem.rss
+            except psutil.AccessDenied:
+                rss_bytes = 0
+            try:
+                threads = proc.num_threads()
+            except psutil.AccessDenied:
+                threads = 0
             return ProcessInfo(
                 pid=pid,
                 status=ServerStatus.ONLINE,
                 cpu_percent=cpu,
-                rss_bytes=mem.rss,
+                rss_bytes=rss_bytes,
                 thread_count=threads,
                 tmux_alive=tmux_alive,
             )
         except psutil.NoSuchProcess:
+            self._clear_server_cpu_state(server.slug)
             return ProcessInfo(
                 pid=None,
                 status=ServerStatus.CRASHED,
+                cpu_percent=0.0,
+                rss_bytes=0,
+                thread_count=0,
+                tmux_alive=tmux_alive,
+            )
+        except psutil.AccessDenied:
+            self._clear_server_cpu_state(server.slug, keep_pid=pid)
+            return ProcessInfo(
+                pid=pid,
+                status=ServerStatus.ONLINE if tmux_alive else ServerStatus.UNKNOWN,
                 cpu_percent=0.0,
                 rss_bytes=0,
                 thread_count=0,
@@ -192,26 +255,148 @@ class LocalTmuxProcessBackend:
     # ──────────────────────────────
 
     def _find_pid(self, server: Server) -> Optional[int]:
-        # 1) PID file (nejspolehlivější)
-        if server.pid_file_path:
-            try:
-                with open(server.pid_file_path) as f:
-                    return int(f.read().strip())
-            except (OSError, ValueError):
-                pass
+        pid_from_file = self._load_pid_file(server)
+        if pid_from_file is not None:
+            return pid_from_file
 
-        # 2) Projít child procesy tmux session
-        # tmux list-panes -t SESSION -F "#{pane_pid}"
-        try:
-            result = self._run(["list-panes", "-t", server.tmux_session_name, "-F", "#{pane_pid}"], check=False)
-            if result.returncode == 0:
-                pane_pid = int(result.stdout.strip())
-                # Vrátíme první child proces pane (= shell nebo server)
-                children = psutil.Process(pane_pid).children(recursive=False)
-                if children:
-                    return children[0].pid
-                return pane_pid
-        except (TmuxError, ValueError, psutil.NoSuchProcess):
-            pass
+        for pane_pid in self._list_pane_pids(server):
+            resolved = self._resolve_pane_server_pid(pane_pid)
+            if resolved is not None:
+                return resolved
 
         return None
+
+    def _load_pid_file(self, server: Server) -> Optional[int]:
+        if not server.pid_file_path:
+            return None
+        try:
+            with open(server.pid_file_path) as f:
+                pid = int(f.read().strip())
+        except (OSError, ValueError):
+            return None
+        return pid if psutil.pid_exists(pid) else None
+
+    def _list_pane_pids(self, server: Server) -> list[int]:
+        try:
+            result = self._run(["list-panes", "-t", server.tmux_session_name, "-F", "#{pane_pid}"], check=False)
+        except TmuxError:
+            return []
+        if result.returncode != 0 or not result.stdout.strip():
+            return []
+
+        pane_pids: list[int] = []
+        for raw_line in result.stdout.splitlines():
+            stripped = raw_line.strip()
+            if not stripped:
+                continue
+            try:
+                pane_pids.append(int(stripped))
+            except ValueError:
+                continue
+        return pane_pids
+
+    def _resolve_pane_server_pid(self, pane_pid: int) -> Optional[int]:
+        try:
+            pane_proc = psutil.Process(pane_pid)
+            if not pane_proc.is_running():
+                return None
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            return None
+
+        if self._is_server_process_candidate(pane_proc):
+            return pane_proc.pid
+
+        candidates = []
+        for child in self._safe_children(pane_proc):
+            if not self._is_server_process_candidate(child):
+                continue
+            candidates.append(child)
+
+        if not candidates:
+            return None
+
+        best = max(candidates, key=self._candidate_sort_key)
+        return best.pid
+
+    def _sample_cpu(self, server_slug: str, proc: psutil.Process) -> float:
+        pid = proc.pid
+        cached_pid = self._server_pids.get(server_slug)
+        if cached_pid != pid:
+            self._clear_server_cpu_state(server_slug)
+            self._server_pids[server_slug] = pid
+
+        create_time = self._safe_create_time(proc)
+        cached = self._cpu_samples.get(pid)
+        if cached is None or cached.create_time != create_time:
+            cached = _CachedCpuSample(process=proc, create_time=create_time)
+            self._cpu_samples[pid] = cached
+
+        if not cached.initialized:
+            cached.process.cpu_percent(interval=None)
+            cached.initialized = True
+            return 0.0
+
+        return cached.process.cpu_percent(interval=None)
+
+    def _clear_server_cpu_state(self, server_slug: str, keep_pid: Optional[int] = None) -> None:
+        cached_pid = self._server_pids.get(server_slug)
+        if cached_pid is not None and cached_pid != keep_pid:
+            self._cpu_samples.pop(cached_pid, None)
+            self._server_pids.pop(server_slug, None)
+        elif keep_pid is None:
+            self._server_pids.pop(server_slug, None)
+
+    def _safe_children(self, proc: psutil.Process) -> list[psutil.Process]:
+        try:
+            return proc.children(recursive=True)
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            return []
+
+    def _is_server_process_candidate(self, proc: psutil.Process) -> bool:
+        name = self._process_name(proc)
+        if not name:
+            return False
+        if name in SHELL_PROCESS_NAMES:
+            return False
+        if name in HELPER_PROCESS_NAMES:
+            return False
+        return True
+
+    def _candidate_sort_key(self, proc: psutil.Process) -> tuple[int, int, float, int]:
+        return (
+            self._safe_rss(proc),
+            self._safe_thread_count(proc),
+            -self._safe_create_time(proc, fallback=float("inf")),
+            -proc.pid,
+        )
+
+    def _process_name(self, proc: psutil.Process) -> str:
+        try:
+            name = proc.name()
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            return ""
+        return self._normalize_process_name(name)
+
+    def _normalize_process_name(self, value: str) -> str:
+        normalized = (value or "").strip().strip('"')
+        if not normalized:
+            return ""
+        return os.path.basename(normalized).lower()
+
+    def _safe_rss(self, proc: psutil.Process) -> int:
+        try:
+            return proc.memory_info().rss
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            return 0
+
+    def _safe_thread_count(self, proc: psutil.Process) -> int:
+        try:
+            return proc.num_threads()
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            return 0
+
+    def _safe_create_time(self, proc: psutil.Process, fallback: Optional[float] = None) -> Optional[float]:
+        try:
+            return proc.create_time()
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            return fallback
