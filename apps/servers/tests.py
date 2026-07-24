@@ -1,5 +1,6 @@
 import json
 import tarfile
+from datetime import timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import mock
@@ -7,9 +8,11 @@ from unittest import mock
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
+from django.utils import timezone
 
 from apps.audit.models import AuditEvent
 from apps.setup.models import BootstrapState
+from apps.servers.backup import AUTO_BACKUP_INTERVAL_HOURS, check_auto_backup_due, check_backup_status
 from apps.servers.backup_engine import create_backup
 from apps.servers.forms import ServerForm
 from apps.servers.models import GameType, Server, ServerStatus
@@ -297,6 +300,118 @@ class BackupExclusionTests(TestCase):
 
         self.assertFalse(result["ok"])
         self.assertEqual(list(self.backup_dir.glob("*.tar.gz")), [])
+
+
+class AutoBackupScheduleTests(TestCase):
+    def setUp(self):
+        self.temp_dir = TemporaryDirectory()
+        self.addCleanup(self.temp_dir.cleanup)
+        self.backup_dir = Path(self.temp_dir.name)
+        self.server = Server.objects.create(
+            name="GTNH Production",
+            slug="gtnh-production",
+            game_type=GameType.MINECRAFT_JAVA,
+            working_directory="/srv/minecraft/gtnh-production",
+            start_command="java -jar server.jar nogui",
+            stop_command="stop",
+            tmux_session_name="gtnh_production",
+            log_file_path="/srv/minecraft/gtnh-production/logs/latest.log",
+            backup_directory=str(self.backup_dir),
+            backup_max_age_hours=24,
+            backup_exclude_paths="",
+            status=ServerStatus.OFFLINE,
+        )
+        self.now = timezone.make_aware(timezone.datetime(2026, 7, 24, 12, 0, 0), timezone.get_current_timezone())
+
+    def _create_archive(self, dt, *, is_user=False, name=None):
+        if name is None:
+            suffix = "-USER" if is_user else ""
+            name = f"{self.server.slug}-{dt.strftime('%Y%m%d-%H%M%S')}{suffix}.tar.gz"
+        archive = self.backup_dir / name
+        archive.write_bytes(b"backup")
+        return archive
+
+    def test_no_archive_means_auto_backup_is_due(self):
+        result = check_auto_backup_due(self.server, now=self.now)
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["due"])
+
+    def test_recent_auto_backup_is_not_due(self):
+        self._create_archive(self.now - timedelta(hours=2, minutes=59))
+
+        result = check_auto_backup_due(self.server, now=self.now)
+
+        self.assertTrue(result["ok"])
+        self.assertFalse(result["due"])
+        self.assertEqual(result["newest_kind"], "AUTO")
+
+    def test_auto_backup_exactly_three_hours_old_is_due(self):
+        self._create_archive(self.now - timedelta(hours=AUTO_BACKUP_INTERVAL_HOURS))
+
+        result = check_auto_backup_due(self.server, now=self.now)
+
+        self.assertTrue(result["due"])
+
+    def test_auto_backup_older_than_three_hours_is_due(self):
+        self._create_archive(self.now - timedelta(hours=4))
+
+        result = check_auto_backup_due(self.server, now=self.now)
+
+        self.assertTrue(result["due"])
+
+    def test_recent_user_backup_is_not_due(self):
+        self._create_archive(self.now - timedelta(hours=2), is_user=True)
+
+        result = check_auto_backup_due(self.server, now=self.now)
+
+        self.assertFalse(result["due"])
+        self.assertEqual(result["newest_kind"], "USER")
+
+    def test_old_user_backup_is_due(self):
+        self._create_archive(self.now - timedelta(hours=4), is_user=True)
+
+        result = check_auto_backup_due(self.server, now=self.now)
+
+        self.assertTrue(result["due"])
+        self.assertEqual(result["newest_kind"], "USER")
+
+    def test_newer_user_backup_wins_over_older_auto_backup(self):
+        self._create_archive(self.now - timedelta(hours=5))
+        self._create_archive(self.now - timedelta(hours=2), is_user=True)
+
+        result = check_auto_backup_due(self.server, now=self.now)
+
+        self.assertFalse(result["due"])
+        self.assertEqual(result["newest_kind"], "USER")
+
+    def test_newer_auto_backup_wins_over_older_user_backup(self):
+        self._create_archive(self.now - timedelta(hours=5), is_user=True)
+        self._create_archive(self.now - timedelta(hours=2))
+
+        result = check_auto_backup_due(self.server, now=self.now)
+
+        self.assertFalse(result["due"])
+        self.assertEqual(result["newest_kind"], "AUTO")
+
+    def test_unrelated_tar_gz_does_not_affect_due_decision(self):
+        self._create_archive(self.now - timedelta(minutes=30), name="gtnh-production-manual-export.tar.gz")
+        self._create_archive(self.now - timedelta(hours=4), name="other-server-20260724-080000.tar.gz")
+
+        result = check_auto_backup_due(self.server, now=self.now)
+
+        self.assertTrue(result["due"])
+        self.assertNotIn("newest_file", result)
+
+    def test_backup_max_age_hours_does_not_change_three_hour_due_interval(self):
+        self._create_archive(self.now - timedelta(hours=4))
+
+        due_result = check_auto_backup_due(self.server, now=self.now)
+        status_result = check_backup_status(self.server, now=self.now)
+
+        self.assertTrue(due_result["due"])
+        self.assertTrue(status_result["ok"])
+        self.assertEqual(status_result["max_age_hours"], 24)
 
     def test_partial_archive_is_removed_after_backup_failure(self):
         def _failing_archive(*args, **kwargs):
