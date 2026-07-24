@@ -17,7 +17,7 @@ def _startup_log_ready(server) -> bool:
     patterns = adapter.startup_patterns()
     if not patterns:
         return False
-    recent = get_console_lines(server.id, 100)
+    recent = get_console_lines(server.id, 100, live_only=True)
     return any(adapter.is_startup_complete(item["line"]) for item in recent)
 
 

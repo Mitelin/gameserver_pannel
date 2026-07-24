@@ -55,8 +55,20 @@ class ServerConsumer(AsyncWebsocketConsumer):
             f"server.{self.server_id}.metrics",
             f"server.{self.server_id}.events",
         ]
-        for group in self.groups:
-            await self.channel_layer.group_add(group, self.channel_name)
+        joined_groups = []
+        try:
+            for group in self.groups:
+                await self.channel_layer.group_add(group, self.channel_name)
+                joined_groups.append(group)
+        except Exception as exc:
+            logger.warning("WS connect cleanup: group_add selhal pro %s: %s", self.slug, exc)
+            for group in joined_groups:
+                try:
+                    await self.channel_layer.group_discard(group, self.channel_name)
+                except Exception as discard_exc:
+                    logger.warning("WS connect cleanup: group_discard selhal pro %s: %s", group, discard_exc)
+            await self.close(code=1011)
+            return
 
         await self.accept()
         logger.info("WS connect: user=%s server=%s", self.user, self.slug)
@@ -70,7 +82,10 @@ class ServerConsumer(AsyncWebsocketConsumer):
 
     async def disconnect(self, close_code):
         for group in getattr(self, "groups", []):
-            await self.channel_layer.group_discard(group, self.channel_name)
+            try:
+                await self.channel_layer.group_discard(group, self.channel_name)
+            except Exception as exc:
+                logger.warning("WS disconnect cleanup: group_discard selhal pro %s: %s", group, exc)
         logger.info("WS disconnect: user=%s server=%s code=%s", self.user, self.slug, close_code)
 
     # ─────────────────────────────────────────────
@@ -124,6 +139,13 @@ class ServerConsumer(AsyncWebsocketConsumer):
             "type":      "console.line",
             "timestamp": event["timestamp"],
             "line":      event["line"],
+        }))
+
+    async def console_lines(self, event):
+        await self.send(text_data=json.dumps({
+            "type": "console.lines",
+            "replace": event.get("replace", False),
+            "lines": event.get("lines", []),
         }))
 
     async def server_status(self, event):

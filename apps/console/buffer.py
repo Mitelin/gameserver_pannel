@@ -21,19 +21,27 @@ def _activity_key(server_id: int) -> str:
     return f"console.activity.{server_id}"
 
 
-def append_console_lines(server_id: int, batch: list[tuple[str, str]], source: str) -> list[dict]:
+def _store_console_lines(
+    server_id: int,
+    batch: list[tuple[str, str]],
+    source: str,
+    *,
+    is_live: bool,
+    replace: bool,
+) -> list[dict]:
     if not batch:
         return []
 
     now = timezone.now().isoformat()
     with _buffer_lock:
-        items = list(cache.get(_buffer_key(server_id), []))
+        items = [] if replace else list(cache.get(_buffer_key(server_id), []))
         for stream_type, line in batch:
             items.append({
                 "timestamp": now,
                 "line": line,
                 "stream_type": stream_type,
                 "source": source,
+                "is_live": is_live,
             })
         if len(items) > CONSOLE_BUFFER_LIMIT:
             items = items[-CONSOLE_BUFFER_LIMIT:]
@@ -41,8 +49,30 @@ def append_console_lines(server_id: int, batch: list[tuple[str, str]], source: s
         return items[-len(batch):]
 
 
-def get_console_lines(server_id: int, limit: int | None = None) -> list[dict]:
+def append_console_lines(
+    server_id: int,
+    batch: list[tuple[str, str]],
+    source: str,
+    *,
+    is_live: bool = True,
+) -> list[dict]:
+    return _store_console_lines(server_id, batch, source, is_live=is_live, replace=False)
+
+
+def replace_console_lines(
+    server_id: int,
+    batch: list[tuple[str, str]],
+    source: str,
+    *,
+    is_live: bool = False,
+) -> list[dict]:
+    return _store_console_lines(server_id, batch, source, is_live=is_live, replace=True)
+
+
+def get_console_lines(server_id: int, limit: int | None = None, *, live_only: bool = False) -> list[dict]:
     items = list(cache.get(_buffer_key(server_id), []))
+    if live_only:
+        items = [item for item in items if item.get("is_live", True)]
     if limit is None or limit >= len(items):
         return items
     return items[-limit:]

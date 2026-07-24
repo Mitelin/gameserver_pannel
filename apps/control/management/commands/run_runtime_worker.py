@@ -17,11 +17,15 @@ import signal
 import time
 import logging
 import threading
+import queue
+from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
 
 import psutil
 import requests
+from django.db import close_old_connections, connections
+from django.db.utils import InterfaceError
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 from django.core.cache import cache
@@ -29,7 +33,7 @@ from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
 
 from apps.servers.models import Server, ServerStatus
-from apps.console.buffer import append_console_lines, get_console_lines, touch_console_activity
+from apps.console.buffer import append_console_lines, clear_console_lines, get_console_lines, replace_console_lines, touch_console_activity
 from apps.metrics.models import MetricSample
 from apps.metrics.aggregator import aggregate_to_minutes, aggregate_to_hours, run_retention_cleanup
 from apps.audit.models import AuditEvent
@@ -56,6 +60,115 @@ HEARTBEAT_CONSOLE  = "runtime.heartbeat.console"
 HEARTBEAT_METRICS  = "runtime.heartbeat.metrics"
 HEARTBEAT_WATCHDOG = "runtime.heartbeat.watchdog"
 DESIRED_STATE_RESTORE_TTL = 30
+CONSOLE_WS_BATCH_SIZE = 100
+CONSOLE_WS_QUEUE_SIZE = 256
+
+
+@dataclass
+class _ConsoleReadResult:
+    lines: list[str]
+    is_live: bool
+    replace_buffer: bool
+    source: str
+
+
+@dataclass
+class _QueuedConsoleBroadcast:
+    group: str
+    payload: dict
+
+
+class _ConsoleBroadcastWorker:
+    def __init__(self, channel_layer, *, max_queue_size=CONSOLE_WS_QUEUE_SIZE):
+        self.channel_layer = channel_layer
+        self._queue: queue.Queue = queue.Queue(maxsize=max_queue_size)
+        self._stop_event = threading.Event()
+        self._thread = threading.Thread(target=self._run, name="console-ws-publisher", daemon=True)
+
+    def start(self):
+        self._thread.start()
+
+    def stop(self):
+        self._stop_event.set()
+
+    def join(self, timeout=None):
+        self._thread.join(timeout=timeout)
+
+    def enqueue(self, server_id: str, stored_entries: list[dict], *, replace=False):
+        for item in _build_console_ws_messages(server_id, stored_entries, replace=replace):
+            try:
+                self._queue.put_nowait(item)
+            except queue.Full:
+                logger.warning("Console WS queue je plná pro server %s; přeskočen %dřádkový batch.", server_id, len(item.payload.get("lines", [])))
+                return False
+        return True
+
+    def _run(self):
+        while not self._stop_event.is_set() or not self._queue.empty():
+            try:
+                item = self._queue.get(timeout=0.2)
+            except queue.Empty:
+                continue
+            try:
+                async_to_sync(self.channel_layer.group_send)(item.group, item.payload)
+            except Exception as exc:
+                logger.warning("WS push (console batch) selhal: %s", exc)
+
+
+def _build_console_ws_messages(server_id: str, stored_entries: list[dict], *, replace=False, batch_size=CONSOLE_WS_BATCH_SIZE):
+    if not stored_entries and replace:
+        return [
+            _QueuedConsoleBroadcast(
+                group=f"server.{server_id}.console",
+                payload={"type": "console.lines", "replace": True, "lines": []},
+            )
+        ]
+
+    messages = []
+    for start in range(0, len(stored_entries), batch_size):
+        chunk = stored_entries[start:start + batch_size]
+        messages.append(_QueuedConsoleBroadcast(
+            group=f"server.{server_id}.console",
+            payload={
+                "type": "console.lines",
+                "replace": replace and start == 0,
+                "lines": [
+                    {
+                        "timestamp": item["timestamp"],
+                        "line": item["line"],
+                        "replay": not item.get("is_live", True),
+                    }
+                    for item in chunk
+                ],
+            },
+        ))
+    return messages
+
+
+def _publish_console_entries(ws_publisher, server_id, stored_entries, *, replace=False):
+    if not ws_publisher or not stored_entries:
+        return
+    try:
+        ws_publisher.enqueue(str(server_id), stored_entries, replace=replace)
+    except Exception as exc:
+        logger.warning("Console WS enqueue selhal pro %s: %s", server_id, exc)
+
+
+def _close_thread_connections_quietly():
+    try:
+        connections.close_all()
+    except InterfaceError:
+        logger.debug("Django DB connection už byla zavřená během shutdown.")
+    except Exception:
+        logger.debug("Nepodařilo se korektně zavřít DB connections ve worker threadu.")
+
+
+def _run_worker_thread(target, stop_event: threading.Event):
+    close_old_connections()
+    try:
+        target(stop_event)
+    finally:
+        _close_thread_connections_quietly()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -96,22 +209,7 @@ class _LogTailer:
                 pass
             self._fh = None
 
-    def read_new_lines(self):
-        if self._fh is None:
-            if not self.open():
-                return []
-        try:
-            stat = self.path.stat()
-            # inode check – na Windows je st_ino vždy 0, přeskočíme
-            if self._inode and stat.st_ino and stat.st_ino != self._inode:
-                logger.info("[%s] Log rotation", self.server.slug)
-                self.close(); self.open(); return []
-            if stat.st_size < self._fh.tell():
-                logger.info("[%s] Log truncation", self.server.slug)
-                self.close(); self.open(); return []
-        except OSError:
-            self.close()
-            return []
+    def _drain_available_lines(self):
         lines = []
         try:
             while True:
@@ -123,6 +221,34 @@ class _LogTailer:
             logger.warning("[%s] Chyba čtení: %s", self.server.slug, e)
             self.close()
         return lines
+
+    def _open_snapshot(self, source: str):
+        if not self.open():
+            return None
+        lines = self._drain_available_lines()
+        return _ConsoleReadResult(lines=lines, is_live=False, replace_buffer=True, source=source)
+
+    def read_new_lines(self):
+        if self._fh is None:
+            return self._open_snapshot("log_tail.snapshot.initial")
+        try:
+            stat = self.path.stat()
+            # inode check – na Windows je st_ino vždy 0, přeskočíme
+            if self._inode and stat.st_ino and stat.st_ino != self._inode:
+                logger.info("[%s] Log rotation", self.server.slug)
+                self.close()
+                return self._open_snapshot("log_tail.snapshot.rotation")
+            if stat.st_size < self._fh.tell():
+                logger.info("[%s] Log truncation", self.server.slug)
+                self.close()
+                return self._open_snapshot("log_tail.snapshot.truncation")
+        except OSError:
+            self.close()
+            return None
+        lines = self._drain_available_lines()
+        if not lines:
+            return None
+        return _ConsoleReadResult(lines=lines, is_live=True, replace_buffer=False, source="log_tail")
 
 
 def _check_startup(server, lines):
@@ -149,6 +275,56 @@ def _check_startup(server, lines):
             break
 
 
+def _process_console_read(server, console_read: _ConsoleReadResult, ws_publisher, *, now=None):
+    if not console_read:
+        return
+
+    if console_read.replace_buffer and not console_read.lines:
+        clear_console_lines(server.id)
+        _publish_console_entries(ws_publisher, server.id, [], replace=True)
+        return
+
+    batch = [("stdout", line) for line in console_read.lines]
+    if console_read.replace_buffer:
+        stored_entries = replace_console_lines(
+            server.id,
+            batch,
+            source=console_read.source,
+            is_live=console_read.is_live,
+        )
+    else:
+        stored_entries = append_console_lines(
+            server.id,
+            batch,
+            source=console_read.source,
+            is_live=console_read.is_live,
+        )
+
+    if console_read.is_live:
+        effective_now = now or timezone.now()
+        try:
+            touch_console_activity(server, effective_now)
+        except Exception:
+            pass
+
+        for line in console_read.lines:
+            try:
+                from apps.servers.player_tracker import process_line_for_players
+                process_line_for_players(server, line)
+            except Exception as e:
+                logger.debug("player_tracker chyba: %s", e)
+
+            try:
+                from apps.alerts.engine import check_log_pattern_alert
+                check_log_pattern_alert(server, line)
+            except Exception as e:
+                logger.debug("alert engine chyba: %s", e)
+
+        _check_startup(server, console_read.lines)
+
+    _publish_console_entries(ws_publisher, server.id, stored_entries, replace=console_read.replace_buffer)
+
+
 def _console_loop(stop_event: threading.Event):
     logger.info("Console tailer thread spuštěn.")
     backend = _get_process_backend()
@@ -161,92 +337,57 @@ def _console_loop(stop_event: threading.Event):
         return
 
     channel_layer = get_channel_layer()
+    ws_publisher = _ConsoleBroadcastWorker(channel_layer)
+    ws_publisher.start()
     tailers: dict[str, _LogTailer] = {}
 
-    while not stop_event.is_set():
-        try:
-            active = list(
-                Server.objects.filter(is_active=True)
-                              .exclude(status=ServerStatus.OFFLINE)
-                              .select_related("process_state")
-            )
-            active_slugs = {s.slug for s in active}
-
-            for server in active:
-                if not server.log_file_path:
-                    continue
-                if server.slug not in tailers:
-                    tailers[server.slug] = _LogTailer(server)
-                else:
-                    # Pokud se log_file_path změnil (auto-nastavení při startu), aktualizuj tailer
-                    existing = tailers[server.slug]
-                    if str(existing.path) != server.log_file_path:
-                        existing.close()
-                        tailers[server.slug] = _LogTailer(server)
-
-            for slug in list(tailers):
-                if slug not in active_slugs:
-                    tailers[slug].close()
-                    del tailers[slug]
-
-            for server in active:
-                tailer = tailers.get(server.slug)
-                if not tailer:
-                    continue
-                new_lines = tailer.read_new_lines()
-                if not new_lines:
-                    continue
-
-                append_console_lines(
-                    server.id,
-                    [("stdout", line) for line in new_lines],
-                    source="log_tail",
+    try:
+        while not stop_event.is_set():
+            try:
+                close_old_connections()
+                active = list(
+                    Server.objects.filter(is_active=True)
+                                  .exclude(status=ServerStatus.OFFLINE)
+                                  .select_related("process_state")
                 )
+                active_slugs = {s.slug for s in active}
 
-                try:
-                    touch_console_activity(server, timezone.now())
-                except Exception:
-                    pass
+                for server in active:
+                    if not server.log_file_path:
+                        continue
+                    if server.slug not in tailers:
+                        tailers[server.slug] = _LogTailer(server)
+                    else:
+                        existing = tailers[server.slug]
+                        if str(existing.path) != server.log_file_path:
+                            existing.close()
+                            tailers[server.slug] = _LogTailer(server)
 
-                group = f"server.{server.id}.console"
-                for line in new_lines:
-                    try:
-                        async_to_sync(channel_layer.group_send)(
-                            group,
-                            {
-                                "type":      "console.line",
-                                "server_id": str(server.id),
-                                "timestamp": timezone.now().isoformat(),
-                                "line":      line,
-                            }
-                        )
-                    except Exception as e:
-                        logger.warning("WS push (console) selhal: %s", e)
+                for slug in list(tailers):
+                    if slug not in active_slugs:
+                        tailers[slug].close()
+                        del tailers[slug]
 
-                for line in new_lines:
-                    try:
-                        from apps.servers.player_tracker import process_line_for_players
-                        process_line_for_players(server, line)
-                    except Exception as e:
-                        logger.debug("player_tracker chyba: %s", e)
+                for server in active:
+                    tailer = tailers.get(server.slug)
+                    if not tailer:
+                        continue
+                    console_read = tailer.read_new_lines()
+                    if not console_read:
+                        continue
+                    _process_console_read(server, console_read, ws_publisher)
 
-                    try:
-                        from apps.alerts.engine import check_log_pattern_alert
-                        check_log_pattern_alert(server, line)
-                    except Exception as e:
-                        logger.debug("alert engine chyba: %s", e)
+                cache.set(HEARTBEAT_CONSOLE, timezone.now().isoformat(), HEARTBEAT_TTL)
 
-                _check_startup(server, new_lines)
+            except Exception:
+                logger.exception("Console tailer: neočekávaná chyba v hlavní smyčce")
 
-            cache.set(HEARTBEAT_CONSOLE, timezone.now().isoformat(), HEARTBEAT_TTL)
-
-        except Exception:
-            logger.exception("Console tailer: neočekávaná chyba v hlavní smyčce")
-
-        stop_event.wait(CONSOLE_INTERVAL)
-
-    for t in tailers.values():
-        t.close()
+            stop_event.wait(CONSOLE_INTERVAL)
+    finally:
+        ws_publisher.stop()
+        ws_publisher.join(timeout=2)
+        for t in tailers.values():
+            t.close()
     logger.info("Console tailer thread ukončen.")
 
 
@@ -274,6 +415,7 @@ def _metrics_loop(stop_event: threading.Event):
 
     while not stop_event.is_set():
         try:
+            close_old_connections()
             now = timezone.now()
 
             for server in Server.objects.filter(
@@ -405,6 +547,7 @@ def _watchdog_loop(stop_event: threading.Event):
 
     while not stop_event.is_set():
         try:
+            close_old_connections()
             no_players_tick += 1
             backup_tick     += 1
             check_no_players = (no_players_tick >= 12)
@@ -683,6 +826,7 @@ def _scheduler_loop(stop_event: threading.Event):
 
     while not stop_event.is_set():
         try:
+            close_old_connections()
             now = timezone.localtime()
             # Budeme porovnávat s oknem ±SCHEDULER_INTERVAL sekund aby nedošlo k vynechání při drobném zpoždění
             window = timedelta(seconds=SCHEDULER_INTERVAL)
@@ -846,10 +990,10 @@ class Command(BaseCommand):
 def start_runtime_threads(stop_event: threading.Event | None = None):
     stop_event = stop_event or threading.Event()
     threads = [
-        threading.Thread(target=_console_loop,    args=(stop_event,), name="console-tailer",      daemon=True),
-        threading.Thread(target=_metrics_loop,    args=(stop_event,), name="metrics-collector",   daemon=True),
-        threading.Thread(target=_watchdog_loop,   args=(stop_event,), name="server-watchdog",     daemon=True),
-        threading.Thread(target=_scheduler_loop,  args=(stop_event,), name="restart-scheduler",   daemon=True),
+        threading.Thread(target=_run_worker_thread, args=(_console_loop, stop_event),   name="console-tailer",    daemon=False),
+        threading.Thread(target=_run_worker_thread, args=(_metrics_loop, stop_event),   name="metrics-collector", daemon=False),
+        threading.Thread(target=_run_worker_thread, args=(_watchdog_loop, stop_event),  name="server-watchdog",   daemon=False),
+        threading.Thread(target=_run_worker_thread, args=(_scheduler_loop, stop_event), name="restart-scheduler", daemon=False),
     ]
 
     for t in threads:

@@ -387,6 +387,7 @@ def server_detail(request, slug):
                         server.id,
                         [("stdout", line) for line in recent_lines],
                         source="backend_replay",
+                        is_live=False,
                     )
                     initial_lines = get_console_lines(server.id, INITIAL_CONSOLE_LINES)
         except Exception:
