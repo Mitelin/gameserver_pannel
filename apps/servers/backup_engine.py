@@ -18,6 +18,8 @@ import calendar
 
 from django.utils import timezone
 
+from .models import normalize_backup_exclude_paths
+
 logger = logging.getLogger(__name__)
 
 INTRADAY_KEEP_SLOTS = 8
@@ -32,12 +34,16 @@ def _is_backup_archive_for_server(path: Path, server_slug: str) -> bool:
     return path.is_file() and path.name.startswith(f"{server_slug}-") and path.name.endswith(".tar.gz")
 
 
-def _build_tar_filter(src_dir: Path, backup_dir: Path, dest: Path, server_slug: str):
+def _build_tar_filter(src_dir: Path, backup_dir: Path, dest: Path, server_slug: str, excluded_relative_paths: list[str] | None = None):
     src_root = src_dir.resolve()
     backup_root = backup_dir.resolve()
     dest_path = dest.resolve()
     backup_inside_source = backup_root != src_root and backup_root.is_relative_to(src_root)
     backup_equals_source = backup_root == src_root
+    excluded_roots = [
+        (src_root / Path(relative_path)).resolve(strict=False)
+        for relative_path in (excluded_relative_paths or [])
+    ]
 
     def _filter(tarinfo: tarfile.TarInfo):
         relative = Path(*Path(tarinfo.name).parts[1:]) if len(Path(tarinfo.name).parts) > 1 else Path()
@@ -49,13 +55,16 @@ def _build_tar_filter(src_dir: Path, backup_dir: Path, dest: Path, server_slug: 
             return None
         if backup_equals_source and _is_backup_archive_for_server(absolute, server_slug):
             return None
+        for excluded_root in excluded_roots:
+            if absolute == excluded_root or absolute.is_relative_to(excluded_root):
+                return None
         return tarinfo
 
     return _filter
 
 
-def _archive_server_files(src_dir: Path, backup_dir: Path, dest: Path, server_slug: str):
-    tar_filter = _build_tar_filter(src_dir, backup_dir, dest, server_slug)
+def _archive_server_files(src_dir: Path, backup_dir: Path, dest: Path, server_slug: str, excluded_relative_paths: list[str] | None = None):
+    tar_filter = _build_tar_filter(src_dir, backup_dir, dest, server_slug, excluded_relative_paths)
     with tarfile.open(dest, "w:gz", compresslevel=6) as tar:
         tar.add(str(src_dir), arcname=server_slug, filter=tar_filter)
 
@@ -229,10 +238,21 @@ def _do_backup(server, *, is_user: bool = False) -> dict:
     filename = f"{server.slug}-{ts}{suffix}.tar.gz"
     dest     = backup_dir / filename
 
+    try:
+        excluded_relative_paths = normalize_backup_exclude_paths(str(src_dir), getattr(server, "backup_exclude_paths", ""))
+    except ValueError as exc:
+        logger.error("[backup] Neplatná konfigurace vyloučených cest pro %s: %s", server.slug, exc)
+        return {"ok": False, "message": f"Neplatná konfigurace vyloučených cest: {exc}"}
+
     logger.info("[backup] Spouštím zálohu %s → %s", src_dir, dest)
+    logger.info(
+        "[backup] Vyloučené relativní cesty pro %s: %s",
+        server.slug,
+        ", ".join(excluded_relative_paths) if excluded_relative_paths else "žádné",
+    )
 
     try:
-        _archive_server_files(src_dir, backup_dir, dest, server.slug)
+        _archive_server_files(src_dir, backup_dir, dest, server.slug, excluded_relative_paths)
         size = dest.stat().st_size
         logger.info("[backup] Záloha dokončena: %s (%.1f MB)", filename, size / 1048576)
 

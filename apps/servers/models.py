@@ -7,8 +7,48 @@ Všechny server-related modely v jednom souboru:
   - ServerProcessState (runtime stav)
   - PlayerSession (join/leave historie) — fáze 5
 """
-from django.db import models
 import uuid
+from pathlib import Path, PurePosixPath, PureWindowsPath
+
+from django.db import models
+
+
+def _is_absolute_backup_exclude_path(value: str) -> bool:
+    return PurePosixPath(value).is_absolute() or PureWindowsPath(value).is_absolute()
+
+
+def _resolve_backup_exclude_candidate(src_root: Path, candidate_path: Path) -> Path:
+    return (src_root / candidate_path).resolve(strict=False)
+
+
+def normalize_backup_exclude_paths(working_directory: str, raw_value: str) -> list[str]:
+    normalized_lines = []
+    seen = set()
+    source_root = Path((working_directory or "").strip()).resolve(strict=False)
+
+    for raw_line in (raw_value or "").splitlines():
+        candidate = raw_line.strip()
+        if not candidate:
+            continue
+        if _is_absolute_backup_exclude_path(candidate):
+            raise ValueError("Vyloučené cesty musí být relativní k pracovnímu adresáři serveru.")
+
+        candidate_path = Path(candidate)
+        resolved = _resolve_backup_exclude_candidate(source_root, candidate_path)
+        try:
+            relative = resolved.relative_to(source_root)
+        except ValueError as exc:
+            raise ValueError("Vyloučená cesta musí zůstat uvnitř pracovního adresáře serveru.") from exc
+
+        normalized = relative.as_posix().strip()
+        if normalized in {"", "."}:
+            raise ValueError("Vyloučená cesta nesmí představovat samotný pracovní adresář serveru.")
+
+        if normalized not in seen:
+            normalized_lines.append(normalized)
+            seen.add(normalized)
+
+    return normalized_lines
 
 
 class ServerStatus(models.TextChoices):
@@ -78,6 +118,7 @@ class Server(models.Model):
     backup_directory          = models.CharField(max_length=512, blank=True)
     backup_max_age_hours      = models.IntegerField(default=24)
     backup_keep_count         = models.IntegerField(default=7, help_text="Počet záloh k uchování (rotace)")
+    backup_exclude_paths      = models.TextField(blank=True, default="")
 
     class Meta:
         ordering = ["name"]

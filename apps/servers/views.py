@@ -45,7 +45,7 @@ _TRACKED_FIELDS = [
     "tmux_session_name", "log_file_path",
     "expected_startup_seconds", "expected_shutdown_seconds",
     "rcon_enabled", "rcon_host", "rcon_port",
-    "backup_directory", "backup_max_age_hours",
+    "backup_directory", "backup_max_age_hours", "backup_exclude_paths",
     "webhook_url", "webhook_on_crash", "webhook_on_start", "webhook_on_stop",
 ]
 
@@ -482,7 +482,7 @@ _EXPORT_FIELDS = [
     "rcon_enabled", "rcon_host", "rcon_port",
     "expected_startup_seconds", "expected_shutdown_seconds",
     "webhook_url", "webhook_on_crash", "webhook_on_start", "webhook_on_stop",
-    "backup_directory", "backup_max_age_hours", "backup_keep_count",
+    "backup_directory", "backup_max_age_hours", "backup_keep_count", "backup_exclude_paths",
 ]
 
 
