@@ -68,6 +68,49 @@ class ServerForm(forms.ModelForm):
         ]:
             self.fields[name].required = False
         self.fields["rcon_enabled"].required = False
+        self.fields["rcon_port"].min_value = 1
+        self.fields["rcon_port"].max_value = 65535
+
+    def _clean_rcon_for_minecraft(self, cleaned, working_directory: str):
+        props = {}
+        if working_directory:
+            props = read_properties_file(Path(working_directory) / "server.properties")
+
+        current_host = getattr(self.instance, "rcon_host", "")
+        current_port = getattr(self.instance, "rcon_port", None)
+        current_password = getattr(self.instance, "rcon_password", "")
+
+        props_host = "127.0.0.1"
+        try:
+            props_port = int(props.get("rcon.port", "25575") or "25575") if props else None
+        except (TypeError, ValueError):
+            props_port = None
+        props_password = props.get("rcon.password", "")
+
+        rcon_enabled = bool(cleaned.get("rcon_enabled"))
+        cleaned["rcon_enabled"] = rcon_enabled
+
+        if not rcon_enabled:
+            cleaned["rcon_host"] = (current_host or cleaned.get("rcon_host") or "").strip()
+            cleaned["rcon_port"] = current_port
+            cleaned["rcon_password"] = cleaned.get("rcon_password") or current_password or props_password
+            return
+
+        cleaned["rcon_host"] = (cleaned.get("rcon_host") or current_host or props_host).strip()
+
+        raw_port = cleaned.get("rcon_port")
+        if raw_port in (None, ""):
+            raw_port = current_port or props_port or 25575
+        try:
+            port = int(raw_port)
+        except (TypeError, ValueError):
+            self.add_error("rcon_port", "Zadej platné číslo portu pro RCON.")
+            return
+        if port < 1 or port > 65535:
+            self.add_error("rcon_port", "Port musí být celé číslo v rozsahu 1–65535.")
+            return
+        cleaned["rcon_port"] = port
+        cleaned["rcon_password"] = (cleaned.get("rcon_password") or current_password or props_password).strip()
 
     def clean(self):
         cleaned = super().clean()
@@ -111,29 +154,30 @@ class ServerForm(forms.ModelForm):
             getattr(self.instance, "expected_shutdown_seconds", Server._meta.get_field("expected_shutdown_seconds").default),
         ))
 
-        props = {}
-        if game_type == GameType.MINECRAFT_JAVA and working_directory:
-            props = read_properties_file(Path(working_directory) / "server.properties")
-
-        current_enabled = getattr(self.instance, "rcon_enabled", False)
-        current_host = getattr(self.instance, "rcon_host", "")
-        current_port = getattr(self.instance, "rcon_port", None)
-        current_password = getattr(self.instance, "rcon_password", "")
-
-        props_enabled = props.get("enable-rcon", "false").lower() == "true" or bool(props.get("rcon.password"))
-        props_host = "127.0.0.1"
-        props_port = int(props.get("rcon.port", "25575") or "25575") if props else None
-        props_password = props.get("rcon.password", "")
-
         if game_type == GameType.MINECRAFT_JAVA:
-            cleaned["rcon_enabled"] = bool(cleaned.get("rcon_enabled") or current_enabled or props_enabled)
-            cleaned["rcon_host"] = (cleaned.get("rcon_host") or current_host or props_host).strip()
-            cleaned["rcon_port"] = int(_coalesce(cleaned.get("rcon_port"), current_port or props_port or 25575))
-            cleaned["rcon_password"] = (cleaned.get("rcon_password") or current_password or props_password).strip()
+            self._clean_rcon_for_minecraft(cleaned, working_directory)
         else:
-            cleaned["rcon_enabled"] = bool(cleaned.get("rcon_enabled") or current_enabled)
+            current_host = getattr(self.instance, "rcon_host", "")
+            current_port = getattr(self.instance, "rcon_port", None)
+            current_password = getattr(self.instance, "rcon_password", "")
+            rcon_enabled = bool(cleaned.get("rcon_enabled"))
+            cleaned["rcon_enabled"] = rcon_enabled
             cleaned["rcon_host"] = (cleaned.get("rcon_host") or current_host).strip()
-            cleaned["rcon_port"] = _coalesce(cleaned.get("rcon_port"), current_port)
+            if rcon_enabled:
+                port = cleaned.get("rcon_port")
+                if port in (None, ""):
+                    port = current_port or 25575
+                try:
+                    port = int(port)
+                except (TypeError, ValueError):
+                    self.add_error("rcon_port", "Zadej platné číslo portu pro RCON.")
+                else:
+                    if port < 1 or port > 65535:
+                        self.add_error("rcon_port", "Port musí být celé číslo v rozsahu 1–65535.")
+                    else:
+                        cleaned["rcon_port"] = port
+            else:
+                cleaned["rcon_port"] = current_port
             cleaned["rcon_password"] = (cleaned.get("rcon_password") or current_password).strip()
 
         return cleaned

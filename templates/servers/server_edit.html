@@ -175,7 +175,7 @@ label { font-size:12px; color:var(--text-dim); }
   </div>
 
   <div class="card advanced-box">
-    <details>
+    <details id="advanced-settings">
       <summary>Pokročilé nastavení</summary>
       <div class="field-grid">
         <div class="field-group">
@@ -222,6 +222,7 @@ label { font-size:12px; color:var(--text-dim); }
         <div class="field-group">
           <label>RCON port</label>
           {{ form.rcon_port }}
+          {% if form.rcon_port.errors %}<div class="field-error">{{ form.rcon_port.errors.0 }}</div>{% endif %}
         </div>
         <div class="field-group span2">
           <label>RCON heslo</label>
@@ -508,5 +509,47 @@ async function discoverFromWorkingDir() {
 }
 
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closePicker(); });
+
+const serverForm = document.getElementById('server-form');
+const rconEnabledField = document.getElementById('id_rcon_enabled');
+const rconDependentFieldIds = ['id_rcon_host', 'id_rcon_port', 'id_rcon_password'];
+
+function getRconDependentFields(){
+  return rconDependentFieldIds
+    .map(id => document.getElementById(id))
+    .filter(Boolean);
+}
+
+function syncRconFields(){
+  if(!rconEnabledField) return;
+  const enabled = rconEnabledField.checked;
+  const portField = document.getElementById('id_rcon_port');
+
+  for(const field of getRconDependentFields()){
+    field.disabled = !enabled;
+  }
+
+  if(enabled && portField && (!portField.value.trim() || portField.validity.badInput)){
+    portField.value = '25575';
+  }
+}
+
+function revealInvalidDetails(event){
+  const field = event.target;
+  if(!(field instanceof HTMLElement)) return;
+  const collapsedDetails = field.closest('details:not([open])');
+  if(collapsedDetails){
+    collapsedDetails.open = true;
+  }
+}
+
+if(serverForm){
+  serverForm.addEventListener('invalid', revealInvalidDetails, true);
+}
+
+if(rconEnabledField){
+  syncRconFields();
+  rconEnabledField.addEventListener('change', syncRconFields);
+}
 </script>
 {% endblock %}
