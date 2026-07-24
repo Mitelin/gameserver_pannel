@@ -45,6 +45,7 @@ _TRACKED_FIELDS = [
     "tmux_session_name", "log_file_path",
     "expected_startup_seconds", "expected_shutdown_seconds",
     "rcon_enabled", "rcon_host", "rcon_port",
+    "backup_directory", "backup_max_age_hours",
     "webhook_url", "webhook_on_crash", "webhook_on_start", "webhook_on_stop",
 ]
 
