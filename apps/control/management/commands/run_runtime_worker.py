@@ -78,6 +78,13 @@ class _QueuedConsoleBroadcast:
     payload: dict
 
 
+@dataclass
+class _QueuedConsoleUpdate:
+    server_id: str
+    stored_entries: list[dict]
+    replace: bool
+
+
 class _ConsoleBroadcastWorker:
     def __init__(self, channel_layer, *, max_queue_size=CONSOLE_WS_QUEUE_SIZE):
         self.channel_layer = channel_layer
@@ -95,24 +102,32 @@ class _ConsoleBroadcastWorker:
         self._thread.join(timeout=timeout)
 
     def enqueue(self, server_id: str, stored_entries: list[dict], *, replace=False):
-        for item in _build_console_ws_messages(server_id, stored_entries, replace=replace):
-            try:
-                self._queue.put_nowait(item)
-            except queue.Full:
-                logger.warning("Console WS queue je plná pro server %s; přeskočen %dřádkový batch.", server_id, len(item.payload.get("lines", [])))
-                return False
+        try:
+            self._queue.put_nowait(_QueuedConsoleUpdate(
+                server_id=server_id,
+                stored_entries=list(stored_entries),
+                replace=replace,
+            ))
+        except queue.Full:
+            logger.warning("Console WS queue je plná pro server %s; přeskočen celý console update (%d řádků).", server_id, len(stored_entries))
+            return False
         return True
 
     def _run(self):
         while not self._stop_event.is_set() or not self._queue.empty():
             try:
-                item = self._queue.get(timeout=0.2)
+                update = self._queue.get(timeout=0.2)
             except queue.Empty:
                 continue
-            try:
-                async_to_sync(self.channel_layer.group_send)(item.group, item.payload)
-            except Exception as exc:
-                logger.warning("WS push (console batch) selhal: %s", exc)
+            for item in _build_console_ws_messages(
+                update.server_id,
+                update.stored_entries,
+                replace=update.replace,
+            ):
+                try:
+                    async_to_sync(self.channel_layer.group_send)(item.group, item.payload)
+                except Exception as exc:
+                    logger.warning("WS push (console batch) selhal: %s", exc)
 
 
 def _build_console_ws_messages(server_id: str, stored_entries: list[dict], *, replace=False, batch_size=CONSOLE_WS_BATCH_SIZE):
@@ -146,7 +161,7 @@ def _build_console_ws_messages(server_id: str, stored_entries: list[dict], *, re
 
 
 def _publish_console_entries(ws_publisher, server_id, stored_entries, *, replace=False):
-    if not ws_publisher or not stored_entries:
+    if not ws_publisher or (not stored_entries and not replace):
         return
     try:
         ws_publisher.enqueue(str(server_id), stored_entries, replace=replace)
@@ -990,10 +1005,10 @@ class Command(BaseCommand):
 def start_runtime_threads(stop_event: threading.Event | None = None):
     stop_event = stop_event or threading.Event()
     threads = [
-        threading.Thread(target=_run_worker_thread, args=(_console_loop, stop_event),   name="console-tailer",    daemon=False),
-        threading.Thread(target=_run_worker_thread, args=(_metrics_loop, stop_event),   name="metrics-collector", daemon=False),
-        threading.Thread(target=_run_worker_thread, args=(_watchdog_loop, stop_event),  name="server-watchdog",   daemon=False),
-        threading.Thread(target=_run_worker_thread, args=(_scheduler_loop, stop_event), name="restart-scheduler", daemon=False),
+        threading.Thread(target=_run_worker_thread, args=(_console_loop, stop_event),   name="console-tailer",    daemon=True),
+        threading.Thread(target=_run_worker_thread, args=(_metrics_loop, stop_event),   name="metrics-collector", daemon=True),
+        threading.Thread(target=_run_worker_thread, args=(_watchdog_loop, stop_event),  name="server-watchdog",   daemon=True),
+        threading.Thread(target=_run_worker_thread, args=(_scheduler_loop, stop_event), name="restart-scheduler", daemon=True),
     ]
 
     for t in threads:

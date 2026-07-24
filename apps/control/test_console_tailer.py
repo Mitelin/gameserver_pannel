@@ -12,11 +12,13 @@ from django.test import SimpleTestCase, TestCase
 from apps.console.buffer import clear_console_lines, get_console_lines
 from apps.console.consumers import ServerConsumer
 from apps.control.management.commands.run_runtime_worker import (
+    _ConsoleBroadcastWorker,
     _LogTailer,
     _ConsoleReadResult,
     _build_console_ws_messages,
     _process_console_read,
     _run_worker_thread,
+    start_runtime_threads,
 )
 from apps.servers.models import Server, ServerProcessState, ServerStatus
 
@@ -27,10 +29,12 @@ class _FakePublisher:
         self.calls: list[dict] = []
 
     def enqueue(self, server_id: str, stored_entries: list[dict], *, replace=False):
+        built_messages = _build_console_ws_messages(server_id, stored_entries, replace=replace)
         self.calls.append({
             "server_id": server_id,
             "stored_entries": stored_entries,
             "replace": replace,
+            "messages": built_messages,
         })
         if self.should_raise:
             raise RuntimeError("group_send timeout")
@@ -51,6 +55,7 @@ class ConsoleTailerTests(SimpleTestCase):
         clear_console_lines("srv-2")
         clear_console_lines("srv-3")
         clear_console_lines("srv-4")
+        clear_console_lines("srv-5")
         super().tearDown()
 
     def test_initial_open_seeds_context_without_live_side_effects(self):
@@ -161,6 +166,33 @@ class ConsoleTailerTests(SimpleTestCase):
             finally:
                 tailer.close()
 
+    def test_empty_truncation_clears_buffer_and_emits_empty_replace_event(self):
+        with TemporaryDirectory() as temp_dir:
+            log_path = Path(temp_dir) / "panel-console.log"
+            log_path.write_text("old-1\nold-2\n", encoding="utf-8")
+            server = self.make_server(str(log_path), server_id="srv-5")
+            tailer = _LogTailer(server)
+
+            try:
+                _process_console_read(server, tailer.read_new_lines(), _FakePublisher())
+                log_path.write_text("", encoding="utf-8")
+
+                publisher = _FakePublisher()
+                console_read = tailer.read_new_lines()
+                _process_console_read(server, console_read, publisher)
+
+                self.assertEqual(get_console_lines(server.id), [])
+                self.assertEqual(len(publisher.calls), 1)
+                self.assertTrue(publisher.calls[0]["replace"])
+                self.assertEqual(len(publisher.calls[0]["messages"]), 1)
+                self.assertEqual(publisher.calls[0]["messages"][0].payload, {
+                    "type": "console.lines",
+                    "replace": True,
+                    "lines": [],
+                })
+            finally:
+                tailer.close()
+
     def test_large_console_batch_is_chunked_for_websocket_delivery(self):
         stored_entries = [
             {
@@ -175,6 +207,23 @@ class ConsoleTailerTests(SimpleTestCase):
 
         self.assertEqual(len(messages), 3)
         self.assertEqual([len(item.payload["lines"]) for item in messages], [100, 100, 5])
+
+    def test_broadcast_worker_drops_full_replacement_update_atomically(self):
+        worker = _ConsoleBroadcastWorker(channel_layer=mock.Mock(), max_queue_size=1)
+        existing_entries = [{"timestamp": "t0", "line": "existing", "is_live": True}]
+        replacement_entries = [
+            {"timestamp": "t1", "line": f"line-{index}", "is_live": False}
+            for index in range(205)
+        ]
+
+        self.assertTrue(worker.enqueue("srv-1", existing_entries, replace=False))
+        self.assertFalse(worker.enqueue("srv-1", replacement_entries, replace=True))
+        self.assertEqual(worker._queue.qsize(), 1)
+
+        queued_update = worker._queue.get_nowait()
+        self.assertFalse(queued_update.replace)
+        self.assertEqual(queued_update.stored_entries, existing_entries)
+        self.assertTrue(worker._queue.empty())
 
     def test_disconnect_discards_all_groups_even_if_one_fails(self):
         consumer = ServerConsumer()
@@ -200,6 +249,32 @@ class ConsoleTailerTests(SimpleTestCase):
 
         close_old_mock.assert_called_once()
         target.assert_called_once_with(stop_event)
+
+    def test_start_runtime_threads_uses_daemon_workers(self):
+        created_threads = []
+
+        class _FakeThread:
+            def __init__(self, *args, **kwargs):
+                self.target = kwargs.get("target")
+                self.args = kwargs.get("args")
+                self.name = kwargs.get("name")
+                self.daemon = kwargs.get("daemon")
+                self.started = False
+                created_threads.append(self)
+
+            def start(self):
+                self.started = True
+
+        stop_event = mock.Mock()
+
+        with mock.patch("apps.control.management.commands.run_runtime_worker.threading.Thread", side_effect=_FakeThread):
+            returned_event, threads = start_runtime_threads(stop_event)
+
+        self.assertIs(returned_event, stop_event)
+        self.assertEqual(len(threads), 4)
+        self.assertEqual(threads, created_threads)
+        self.assertTrue(all(thread.daemon is True for thread in threads))
+        self.assertTrue(all(thread.started for thread in threads))
 
 
 class ConsoleTailerDbTests(TestCase):
