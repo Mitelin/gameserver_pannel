@@ -6,9 +6,12 @@ from types import SimpleNamespace
 from unittest import mock
 
 import psutil
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, TestCase
 
+from apps.audit.models import AuditEvent
 from apps.control.backends.tmux import LocalTmuxProcessBackend
+from apps.control.management.commands.run_runtime_worker import _check_backup
+from apps.servers.models import GameType
 from apps.servers.models import Server, ServerStatus
 
 
@@ -194,3 +197,83 @@ class LocalTmuxProcessBackendTests(SimpleTestCase):
         self.assertEqual(info.cpu_percent, 0.0)
         self.assertEqual(info.rss_bytes, 0)
         self.assertEqual(info.thread_count, 0)
+
+
+class WorkerAutoBackupTests(TestCase):
+    def make_server(self, **overrides) -> Server:
+        params = {
+            "name": "Test",
+            "slug": "test",
+            "game_type": GameType.MINECRAFT_JAVA,
+            "working_directory": "/srv/server",
+            "start_command": "java -jar server.jar nogui",
+            "stop_command": "stop",
+            "tmux_session_name": "srv_test",
+            "log_file_path": "/srv/server/logs/latest.log",
+            "backup_directory": "/srv/server/backups",
+            "backup_max_age_hours": 24,
+            "status": ServerStatus.OFFLINE,
+        }
+        params.update(overrides)
+        return Server.objects.create(**params)
+
+    def test_check_backup_calls_auto_backup_only_when_due(self):
+        server = self.make_server()
+        due_result = {
+            "ok": True,
+            "due": True,
+            "interval_hours": 3,
+            "message": "Nenalezena žádná panelová záloha; vytvářím první AUTO zálohu.",
+        }
+
+        with mock.patch("apps.servers.backup.check_auto_backup_due", return_value=due_result), \
+             mock.patch("apps.servers.backup_engine.create_backup", return_value={"ok": True, "message": "created"}) as create_backup_mock, \
+             self.assertLogs("apps.control.management.commands.run_runtime_worker", level="INFO") as logs:
+            _check_backup(server)
+
+        create_backup_mock.assert_called_once_with(server, is_user=False)
+        self.assertTrue(any("AUTO backup je splatný" in entry for entry in logs.output))
+
+    def test_check_backup_skips_auto_backup_when_not_due(self):
+        server = self.make_server()
+        due_result = {
+            "ok": True,
+            "due": False,
+            "age_hours": 1.5,
+            "interval_hours": 3,
+            "newest_file": "test-20260724-103000-USER.tar.gz",
+            "newest_kind": "USER",
+            "message": "Poslední panelová záloha test-20260724-103000-USER.tar.gz (USER) je stará 1.5h; AUTO záloha zatím není splatná před 3h intervalem.",
+        }
+
+        with mock.patch("apps.servers.backup.check_auto_backup_due", return_value=due_result), \
+             mock.patch("apps.servers.backup_engine.create_backup") as create_backup_mock, \
+             self.assertLogs("apps.control.management.commands.run_runtime_worker", level="INFO") as logs:
+            _check_backup(server)
+
+        create_backup_mock.assert_not_called()
+        self.assertTrue(any("AUTO backup zatím není splatný" in entry for entry in logs.output))
+
+    def test_check_backup_logs_and_audits_create_failure_without_crashing(self):
+        server = self.make_server()
+        due_result = {
+            "ok": True,
+            "due": True,
+            "age_hours": 4.0,
+            "interval_hours": 3,
+            "newest_file": "test-20260724-080000.tar.gz",
+            "newest_kind": "AUTO",
+            "message": "Poslední panelová záloha test-20260724-080000.tar.gz (AUTO) je stará 4.0h; překročen 3h interval, AUTO záloha je splatná.",
+        }
+        backup_result = {"ok": False, "message": "disk full"}
+
+        with mock.patch("apps.servers.backup.check_auto_backup_due", return_value=due_result), \
+             mock.patch("apps.servers.backup_engine.create_backup", return_value=backup_result), \
+             self.assertLogs("apps.control.management.commands.run_runtime_worker", level="ERROR") as logs:
+            _check_backup(server)
+
+        event = AuditEvent.objects.get(server=server, event_type="server.backup.auto_failed")
+        self.assertEqual(event.message, "disk full")
+        self.assertEqual(event.payload_json["due"]["newest_file"], "test-20260724-080000.tar.gz")
+        self.assertEqual(event.payload_json["auto_backup"]["message"], "disk full")
+        self.assertTrue(any("AUTO backup selhal: disk full" in entry for entry in logs.output))
