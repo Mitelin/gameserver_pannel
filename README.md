@@ -278,6 +278,11 @@ Formát: standardní 5-polní cron výraz.
 
 Zprávy se odesílají příkazem `say` přímo do konzole serveru.
 
+### Zálohy
+
+- AUTO i USER serverové zálohy respektují nastavené vyloučené relativní cesty z pracovního adresáře.
+- Data vyloučená ze záloh se v těchto archivech neuloží a nepůjdou z nich obnovit.
+
 ### Automatická detekce Java
 
 V **Start profilu** klikni **🔍 Najít Java** — panel prohledá:

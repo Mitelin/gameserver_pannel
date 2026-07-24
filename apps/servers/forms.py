@@ -12,7 +12,7 @@ from django import forms
 from django.utils.text import slugify
 
 from .discovery import read_properties_file
-from .models import Server, StartProfile, GameType, ScheduledRestart
+from .models import Server, StartProfile, GameType, ScheduledRestart, normalize_backup_exclude_paths
 
 
 def _coalesce(value, fallback):
@@ -145,6 +145,13 @@ class ServerForm(forms.ModelForm):
         if not (cleaned.get("backup_directory") or "").strip():
             cleaned["backup_directory"] = working_directory
 
+        try:
+            cleaned["backup_exclude_paths"] = "\n".join(
+                normalize_backup_exclude_paths(working_directory, cleaned.get("backup_exclude_paths", ""))
+            )
+        except ValueError as exc:
+            self.add_error("backup_exclude_paths", str(exc))
+
         cleaned["expected_startup_seconds"] = int(_coalesce(
             cleaned.get("expected_startup_seconds"),
             getattr(self.instance, "expected_startup_seconds", Server._meta.get_field("expected_startup_seconds").default),
@@ -191,7 +198,7 @@ class ServerForm(forms.ModelForm):
             "expected_startup_seconds", "expected_shutdown_seconds",
             "rcon_enabled", "rcon_host", "rcon_port", "rcon_password",
             "webhook_url", "webhook_on_crash", "webhook_on_start", "webhook_on_stop",
-            "backup_directory", "backup_max_age_hours",
+            "backup_directory", "backup_max_age_hours", "backup_exclude_paths",
         ]
         widgets = {
             "name":              forms.TextInput(attrs={"class": "field-input"}),
@@ -208,10 +215,12 @@ class ServerForm(forms.ModelForm):
             "webhook_url":           forms.URLInput(attrs={"class": "field-input"}),
             "backup_directory":      forms.TextInput(attrs={"class": "field-input", "placeholder": "/srv/mc/backups"}),
             "backup_max_age_hours":  forms.NumberInput(attrs={"class": "field-input"}),
+            "backup_exclude_paths":  forms.Textarea(attrs={"class": "field-input field-mono", "rows": 4, "placeholder": "dynmap/web/tiles"}),
         }
         help_texts = {
             "slug":              "Automaticky odvozeno z názvu. Měň jen pokud potřebuješ vlastní URL identifikátor.",
             "start_command":     "Příkaz pro spuštění. Nechte prázdné pro použití start profilu.",
+            "backup_exclude_paths": "Jedna relativní cesta na řádek. Příklad: dynmap/web/tiles. Cesty jsou relativní k pracovnímu adresáři serveru.",
         }
 
 

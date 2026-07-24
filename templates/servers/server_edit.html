@@ -250,6 +250,12 @@ label { font-size:12px; color:var(--text-dim); }
         {{ form.backup_max_age_hours }}
         <div class="field-hint">Alert pokud je poslední záloha starší.</div>
       </div>
+      <div class="field-group span2">
+        <label>Vyloučené cesty ze zálohy</label>
+        {{ form.backup_exclude_paths }}
+        <div class="field-hint">{{ form.backup_exclude_paths.help_text }}</div>
+        {% if form.backup_exclude_paths.errors %}<div class="field-error">{{ form.backup_exclude_paths.errors.0 }}</div>{% endif %}
+      </div>
       <div class="field-group">
         <label>Rotace záloh</label>
         <div class="field-hint">Automatická 4úrovňová rotace: 8 intradenních po 3 hodinách, 7 denních, 4 týdenní po 7 dnech a 12 měsíčních z posledního dne v měsíci. Nejstarší zálohy nad limit se průběžně mažou.</div>
