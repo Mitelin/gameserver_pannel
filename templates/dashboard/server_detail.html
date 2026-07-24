@@ -336,6 +336,7 @@ function setWs(s){
 }
 function dispatch(m){
   if(m.type==="console.line")    appendLine(m.line, m.replay);
+  if(m.type==="console.lines")   appendLines(m.lines, m.replace);
   if(m.type==="console.state")   setConsoleState(m.available, m.message, m.can_write);
   if(m.type==="server.status")   setStatus(m.status);
   if(m.type==="metrics.snapshot")updateStats(m);
@@ -465,6 +466,27 @@ function appendLine(line, replay=false){
   }
   consoleBuffer.push({line,replay});
   if(consoleRenderQueued) return;
+  consoleRenderQueued=true;
+  requestAnimationFrame(flushConsoleBuffer);
+}
+
+function appendLines(lines, replace=false){
+  if(replace) clearConsoleView();
+  if(!Array.isArray(lines) || !lines.length) return;
+  const paused=document.getElementById("pause-out").checked;
+  const box=document.getElementById("console-state");
+  if(box && box.textContent==="Server je offline." && (_currentStatus === "ONLINE" || _currentStatus === "STARTING")){
+    box.style.display="none";
+    box.textContent="";
+    box.className="console-state";
+    scheduleConsoleStateRefresh(50);
+  }
+  for(const item of lines){
+    const replay=!!item.replay;
+    if(paused && !replay) continue;
+    consoleBuffer.push({line:item.line,replay});
+  }
+  if(consoleRenderQueued || !consoleBuffer.length) return;
   consoleRenderQueued=true;
   requestAnimationFrame(flushConsoleBuffer);
 }
