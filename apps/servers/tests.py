@@ -1,5 +1,6 @@
 import json
 import tarfile
+from collections import Counter
 from datetime import timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -13,7 +14,7 @@ from django.utils import timezone
 from apps.audit.models import AuditEvent
 from apps.setup.models import BootstrapState
 from apps.servers.backup import AUTO_BACKUP_INTERVAL_HOURS, check_auto_backup_due, check_backup_status
-from apps.servers.backup_engine import create_backup
+from apps.servers.backup_engine import create_backup, list_backups, rotate_backups
 from apps.servers.forms import ServerForm
 from apps.servers.models import GameType, Server, ServerStatus
 
@@ -534,3 +535,90 @@ class ServerEditTests(TestCase):
         self.assertIn("advanced-settings", content)
         self.assertIn("Vyloučené cesty ze zálohy", content)
         self.assertIn("backup_exclude_paths.help_text", content)
+
+
+RETENTION_REPRO_TIMESTAMPS = [
+    "20260724-100957", "20260724-143341", "20260724-173701", "20260724-204011", "20260724-234324",
+    "20260725-024649", "20260725-055011", "20260725-085330", "20260725-115645", "20260725-145959",
+    "20260725-180318", "20260725-210626", "20260726-000935", "20260726-031246", "20260726-061607",
+    "20260726-091927", "20260726-122244", "20260726-152556", "20260726-182916", "20260726-213226",
+    "20260727-003545", "20260727-033905", "20260727-064221", "20260727-094539", "20260727-124848",
+    "20260727-155200", "20260727-185509", "20260727-215816", "20260728-010152", "20260728-040518",
+    "20260728-070856", "20260728-101011", "20260728-131341", "20260728-161716", "20260728-192038",
+    "20260728-222406", "20260729-012728", "20260729-043052", "20260729-073415", "20260729-103745",
+    "20260729-134115", "20260729-164445", "20260729-194816", "20260729-225145", "20260730-015513",
+    "20260730-045837", "20260730-080159", "20260730-110525", "20260730-140852", "20260730-171213",
+    "20260730-201534", "20260730-231858", "20260731-022220", "20260731-052543", "20260731-082906",
+    "20260731-113410", "20260731-143735", "20260731-174102", "20260731-204425", "20260731-234750",
+    "20260801-025112", "20260801-055435", "20260801-085758", "20260801-120123", "20260801-150450",
+]
+
+EXPECTED_LAYERED_KEEP = [
+    ("gtnh-production-20260801-150450.tar.gz", "intraday"),
+    ("gtnh-production-20260801-120123.tar.gz", "intraday"),
+    ("gtnh-production-20260801-085758.tar.gz", "intraday"),
+    ("gtnh-production-20260801-055435.tar.gz", "intraday"),
+    ("gtnh-production-20260801-025112.tar.gz", "intraday"),
+    ("gtnh-production-20260731-234750.tar.gz", "intraday"),
+    ("gtnh-production-20260731-204425.tar.gz", "intraday"),
+    ("gtnh-production-20260731-174102.tar.gz", "intraday"),
+    ("gtnh-production-20260731-143735.tar.gz", "daily"),
+    ("gtnh-production-20260730-231858.tar.gz", "daily"),
+    ("gtnh-production-20260729-225145.tar.gz", "daily"),
+    ("gtnh-production-20260728-222406.tar.gz", "daily"),
+    ("gtnh-production-20260727-215816.tar.gz", "daily"),
+    ("gtnh-production-20260726-213226.tar.gz", "daily"),
+    ("gtnh-production-20260725-210626.tar.gz", "daily"),
+    ("gtnh-production-20260725-145959.tar.gz", "weekly"),
+]
+
+
+class BackupRetentionTests(TestCase):
+    def _make_server(self, directory: Path, *, backup_keep_count: int = 12) -> Server:
+        return Server.objects.create(
+            name="GTNH Production Retention",
+            slug="gtnh-production-retention",
+            game_type=GameType.MINECRAFT_JAVA,
+            working_directory=str(directory),
+            start_command="java -jar server.jar nogui",
+            stop_command="stop",
+            tmux_session_name="gtnh_production_retention",
+            log_file_path=str(directory / "logs" / "latest.log"),
+            backup_directory=str(directory),
+            backup_max_age_hours=24,
+            backup_keep_count=backup_keep_count,
+            backup_exclude_paths="",
+            status=ServerStatus.OFFLINE,
+        )
+
+    def _create_backup_files(self, directory: Path, slug: str) -> None:
+        for stamp in RETENTION_REPRO_TIMESTAMPS:
+            (directory / f"{slug}-{stamp}.tar.gz").write_bytes(b"x")
+
+    def test_rotate_backups_keeps_layered_retention_for_production_timestamp_series(self):
+        with TemporaryDirectory() as temp_dir:
+            backup_dir = Path(temp_dir)
+            server = self._make_server(backup_dir, backup_keep_count=12)
+            self._create_backup_files(backup_dir, server.slug)
+
+            rotation = rotate_backups(server)
+            backups_after_rotation = list_backups(server)
+            kept = [
+                (item["name"], item["retention_bucket"])
+                for item in backups_after_rotation
+                if item["protected_by_rotation"]
+            ]
+            expected_kept = [(name.replace("gtnh-production", server.slug, 1), bucket) for name, bucket in EXPECTED_LAYERED_KEEP]
+
+            self.assertEqual(rotation["rotated"], len(RETENTION_REPRO_TIMESTAMPS) - len(EXPECTED_LAYERED_KEEP))
+            self.assertEqual(rotation["kept_total"], len(EXPECTED_LAYERED_KEEP))
+            self.assertEqual(rotation["kept_intraday"], 8)
+            self.assertEqual(rotation["kept_daily"], 7)
+            self.assertEqual(rotation["kept_weekly"], 1)
+            self.assertEqual(rotation["kept_monthly"], 0)
+            self.assertEqual(len(backups_after_rotation), len(EXPECTED_LAYERED_KEEP))
+            self.assertEqual(kept, expected_kept)
+            self.assertEqual(
+                Counter(item["retention_bucket"] for item in backups_after_rotation),
+                Counter({"intraday": 8, "daily": 7, "weekly": 1}),
+            )

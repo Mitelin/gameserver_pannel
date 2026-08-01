@@ -310,7 +310,28 @@ def rotate_backups(server) -> dict:
         }
 
     annotated, kept_counts = _annotate_backups(backups)
+    kept_backups = [backup for backup in annotated if backup["protected_by_rotation"]]
     to_delete = [backup for backup in annotated if not backup["protected_by_rotation"]]
+
+    logger.info(
+        "[backup] Rotace summary %s: total=%d keep=%d delete=%d buckets=user:%d intraday:%d daily:%d weekly:%d monthly:%d",
+        server.slug,
+        len(annotated),
+        kept_counts["kept_total"],
+        len(to_delete),
+        kept_counts["kept_user"],
+        kept_counts["kept_intraday"],
+        kept_counts["kept_daily"],
+        kept_counts["kept_weekly"],
+        kept_counts["kept_monthly"],
+    )
+    if kept_backups:
+        logger.info(
+            "[backup] Rotace keep %s: %s",
+            server.slug,
+            ", ".join(f"{backup['name']}[{backup['retention_bucket']}]" for backup in kept_backups),
+        )
+
     deleted = 0
     for b in to_delete:
         try:

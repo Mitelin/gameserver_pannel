@@ -66,7 +66,7 @@
         {% if update_info.restart_plan.mode == 'custom' %}
           Custom command
         {% elif update_info.restart_plan.mode == 'systemd' %}
-          systemd: {{ update_info.restart_plan.worker_service }} + {{ update_info.restart_plan.web_service }}
+          systemd: {{ update_info.restart_plan.services|join:", " }}
         {% else %}
           Zadny automaticky restart neni nakonfigurovan.
         {% endif %}

@@ -8,6 +8,7 @@ import logging
 import os
 from pathlib import Path
 import platform
+import re
 import shlex
 import shutil
 import subprocess
@@ -30,10 +31,30 @@ logger = logging.getLogger(__name__)
 INITIAL_CONSOLE_LINES = CONSOLE_BUFFER_LIMIT
 UPDATE_STATE_PATH = Path(__file__).resolve().parents[2] / ".panel_update_state.json"
 UPDATE_LOG_PATH = Path(__file__).resolve().parents[2] / ".panel_update.log"
+DEFAULT_UPDATE_RESTART_SERVICES = (
+    "gameserver-panel-worker.service",
+    "gameserver-panel-web.service",
+    "gameserver-panel-console-tail.service",
+    "gameserver-panel-metrics.service",
+    "gameserver-panel-watchdog.service",
+)
 
 
 def _project_root() -> Path:
     return Path(__file__).resolve().parents[2]
+
+
+def _parse_restart_services(raw: str | None) -> list[str]:
+    parts = re.split(r"[\s,;]+", (raw or "").strip())
+    result = []
+    seen = set()
+    for item in parts:
+        service = item.strip()
+        if not service or service in seen:
+            continue
+        seen.add(service)
+        result.append(service)
+    return result
 
 
 def _update_restart_plan() -> dict:
@@ -41,13 +62,32 @@ def _update_restart_plan() -> dict:
     if env_cmd:
         return {"mode": "custom", "command": env_cmd}
 
-    web_service = (os.environ.get("GAMEPANEL_UPDATE_WEB_SERVICE") or "gameserver-panel-web.service").strip()
-    worker_service = (os.environ.get("GAMEPANEL_UPDATE_WORKER_SERVICE") or "gameserver-panel-worker.service").strip()
+    env_services = _parse_restart_services(os.environ.get("GAMEPANEL_UPDATE_RESTART_SERVICES"))
+    web_env = os.environ.get("GAMEPANEL_UPDATE_WEB_SERVICE")
+    worker_env = os.environ.get("GAMEPANEL_UPDATE_WORKER_SERVICE")
+    web_service = (web_env if web_env is not None else "gameserver-panel-web.service").strip()
+    worker_service = (worker_env if worker_env is not None else "gameserver-panel-worker.service").strip()
+
+    if env_services:
+        services = list(env_services)
+        if worker_env is not None and worker_service:
+            services = [worker_service, *services]
+        if web_env is not None and web_service:
+            services = [*services, web_service]
+    else:
+        services = _parse_restart_services(" ".join(DEFAULT_UPDATE_RESTART_SERVICES))
+        if worker_service:
+            services = [worker_service, *services]
+        if web_service:
+            services = [*services, web_service]
+    services = _parse_restart_services(" ".join(services))
+
     if shutil.which("systemctl"):
         return {
             "mode": "systemd",
             "web_service": web_service,
             "worker_service": worker_service,
+            "services": services,
         }
 
     return {"mode": "none"}
@@ -184,6 +224,15 @@ def _json_shell_write(path: Path, json_payload: str) -> str:
     )
 
 
+def _build_systemd_restart_command(services: list[str]) -> str:
+    commands = []
+    for service in services:
+        quoted = shlex.quote(service)
+        commands.append(f"echo '[update] restarting {service}'")
+        commands.append(f"(systemctl restart {quoted} || sudo -n systemctl restart {quoted} || true)")
+    return "{ " + "; ".join(commands) + "; }"
+
+
 def _build_update_shell_command() -> str:
     root = shlex.quote(str(_project_root()))
     python_executable = shlex.quote(sys.executable)
@@ -194,12 +243,7 @@ def _build_update_shell_command() -> str:
     if restart_plan["mode"] == "custom":
         restart_cmd = f"bash -lc {shlex.quote(restart_plan['command'])}"
     elif restart_plan["mode"] == "systemd":
-        worker = shlex.quote(restart_plan["worker_service"])
-        web = shlex.quote(restart_plan["web_service"])
-        restart_cmd = (
-            f"(systemctl restart {worker} || sudo -n systemctl restart {worker} || true); "
-            f"(systemctl restart {web} || sudo -n systemctl restart {web} || true)"
-        )
+        restart_cmd = _build_systemd_restart_command(restart_plan.get("services") or [])
 
     noop_state = json.dumps({
         "status": "noop",
