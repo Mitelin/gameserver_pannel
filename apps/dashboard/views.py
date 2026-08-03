@@ -274,7 +274,7 @@ echo '[update] started at '$(date -Iseconds) >> {log_path}
 STEP='detect branch'
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
 STEP='fetch origin'
-git fetch --prune origin >> {log_path} 2>&1
+git fetch --prune origin "$BRANCH" >> {log_path} 2>&1
 STEP='compare commits'
 BEHIND=$(git rev-list --right-only --count HEAD...origin/$BRANCH)
 if [ "$BEHIND" -eq 0 ]; then
@@ -283,7 +283,7 @@ if [ "$BEHIND" -eq 0 ]; then
   exit 0
 fi
 STEP='pull changes'
-git pull --ff-only origin "$BRANCH" >> {log_path} 2>&1
+git merge --ff-only FETCH_HEAD >> {log_path} 2>&1
 STEP='install requirements'
 {python_executable} -m pip install -r requirements.txt >> {log_path} 2>&1
 STEP='apply migrations'

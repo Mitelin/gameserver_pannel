@@ -83,3 +83,19 @@ class UpdateRestartPlanTests(SimpleTestCase):
         self.assertIn("systemctl restart beta.service", command)
         self.assertIn("[update] restarting web.service", command)
         self.assertIn("systemctl restart web.service", command)
+
+    @patch("apps.dashboard.views.shutil.which", return_value="/bin/systemctl")
+    @patch.dict(
+        "apps.dashboard.views.os.environ",
+        {
+            "GAMEPANEL_UPDATE_WEB_SERVICE": "gameserver-panel-web.service",
+            "GAMEPANEL_UPDATE_WORKER_SERVICE": "gameserver-panel-worker.service",
+        },
+        clear=True,
+    )
+    def test_update_shell_command_uses_fetch_plus_fast_forward_merge(self, _which):
+        command = _build_update_shell_command()
+
+        self.assertIn('git fetch --prune origin "$BRANCH"', command)
+        self.assertIn("git merge --ff-only FETCH_HEAD", command)
+        self.assertNotIn("git pull --ff-only", command)
