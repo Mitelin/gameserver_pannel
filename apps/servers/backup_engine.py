@@ -30,6 +30,10 @@ MONTHLY_KEEP_MONTHS = 12
 USER_BACKUP_SUFFIX = "USER"
 
 
+def _current_backup_timestamp() -> str:
+    return timezone.localtime(timezone.now()).strftime("%Y%m%d-%H%M%S")
+
+
 def _is_backup_archive_for_server(path: Path, server_slug: str) -> bool:
     return path.is_file() and path.name.startswith(f"{server_slug}-") and path.name.endswith(".tar.gz")
 
@@ -233,7 +237,7 @@ def _do_backup(server, *, is_user: bool = False) -> dict:
     except OSError as e:
         return {"ok": False, "message": f"Nelze vytvořit backup adresář: {e}"}
 
-    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    ts = _current_backup_timestamp()
     suffix = f"-{USER_BACKUP_SUFFIX}" if is_user else ""
     filename = f"{server.slug}-{ts}{suffix}.tar.gz"
     dest     = backup_dir / filename
@@ -307,11 +311,15 @@ def rotate_backups(server) -> dict:
             "kept_daily": 0,
             "kept_weekly": 0,
             "kept_monthly": 0,
+            "kept_files": [],
+            "deleted_files": [],
         }
 
     annotated, kept_counts = _annotate_backups(backups)
     kept_backups = [backup for backup in annotated if backup["protected_by_rotation"]]
     to_delete = [backup for backup in annotated if not backup["protected_by_rotation"]]
+    kept_files = [backup["name"] for backup in kept_backups]
+    deleted_files = [backup["name"] for backup in to_delete]
 
     logger.info(
         "[backup] Rotace summary %s: total=%d keep=%d delete=%d buckets=user:%d intraday:%d daily:%d weekly:%d monthly:%d",
@@ -349,6 +357,8 @@ def rotate_backups(server) -> dict:
         "kept_daily": kept_counts["kept_daily"],
         "kept_weekly": kept_counts["kept_weekly"],
         "kept_monthly": kept_counts["kept_monthly"],
+        "kept_files": kept_files,
+        "deleted_files": deleted_files,
     }
 
 

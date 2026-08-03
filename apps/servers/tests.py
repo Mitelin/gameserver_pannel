@@ -1,10 +1,12 @@
 import json
 import tarfile
 from collections import Counter
+from datetime import datetime
 from datetime import timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import mock
+from zoneinfo import ZoneInfo
 
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -301,6 +303,47 @@ class BackupExclusionTests(TestCase):
 
         self.assertFalse(result["ok"])
         self.assertEqual(list(self.backup_dir.glob("*.tar.gz")), [])
+
+    def test_backup_filename_uses_django_local_time(self):
+        fixed_utc_now = datetime(2026, 8, 3, 0, 30, 45, tzinfo=ZoneInfo("UTC"))
+
+        def _fake_archive(*args, **kwargs):
+            Path(args[2]).write_bytes(b"backup")
+
+        with mock.patch("apps.servers.backup_engine.timezone.now", return_value=fixed_utc_now), \
+             mock.patch("apps.servers.backup_engine._archive_server_files", side_effect=_fake_archive):
+            result = create_backup(self.server, is_user=False)
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["filename"], "gtnh-production-20260803-023045.tar.gz")
+
+    def test_rotation_result_contains_forensic_keep_and_delete_lists(self):
+        for stamp in (
+            "20260801-150450",
+            "20260801-120123",
+            "20260801-085758",
+            "20260801-055435",
+            "20260801-025112",
+            "20260731-234750",
+            "20260731-204425",
+            "20260731-174102",
+            "20260731-143735",
+            "20260730-231858",
+            "20260729-225145",
+            "20260728-222406",
+            "20260727-215816",
+            "20260726-213226",
+            "20260725-210626",
+            "20260725-145959",
+            "20260724-204011",
+        ):
+            (self.backup_dir / f"{self.server.slug}-{stamp}.tar.gz").write_bytes(b"backup")
+
+        rotation = rotate_backups(self.server)
+
+        self.assertIn(f"{self.server.slug}-20260801-150450.tar.gz", rotation["kept_files"])
+        self.assertIn(f"{self.server.slug}-20260724-204011.tar.gz", rotation["deleted_files"])
+        self.assertEqual(rotation["rotated"], 1)
 
 
 class AutoBackupScheduleTests(TestCase):
@@ -616,6 +659,8 @@ class BackupRetentionTests(TestCase):
             self.assertEqual(rotation["kept_daily"], 7)
             self.assertEqual(rotation["kept_weekly"], 1)
             self.assertEqual(rotation["kept_monthly"], 0)
+            self.assertEqual(len(rotation["kept_files"]), len(EXPECTED_LAYERED_KEEP))
+            self.assertEqual(len(rotation["deleted_files"]), len(RETENTION_REPRO_TIMESTAMPS) - len(EXPECTED_LAYERED_KEEP))
             self.assertEqual(len(backups_after_rotation), len(EXPECTED_LAYERED_KEEP))
             self.assertEqual(kept, expected_kept)
             self.assertEqual(
