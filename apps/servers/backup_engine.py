@@ -15,6 +15,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
 import calendar
+from os import stat_result
 
 from django.utils import timezone
 
@@ -28,6 +29,8 @@ DAILY_KEEP_DAYS = 7
 WEEKLY_KEEP_WEEKS = 4
 MONTHLY_KEEP_MONTHS = 12
 USER_BACKUP_SUFFIX = "USER"
+LEGACY_FILENAME_MTIME_DRIFT = timedelta(minutes=90)
+LEGACY_FILENAME_OFFSET_TOLERANCE = timedelta(minutes=30)
 
 
 def _current_backup_timestamp() -> str:
@@ -90,6 +93,22 @@ def _parse_backup_timestamp(server_slug: str, file_name: str):
         return timezone.make_aware(parsed, timezone.get_current_timezone())
     except ValueError:
         return None
+
+
+def _resolve_backup_timestamp(server_slug: str, file_name: str, file_stat: stat_result):
+    parsed_dt = _parse_backup_timestamp(server_slug, file_name)
+    mtime_dt = datetime.fromtimestamp(file_stat.st_mtime, tz=timezone.get_current_timezone())
+    if parsed_dt is None:
+        return mtime_dt, "mtime"
+
+    # Legacy archives created before the local-time filename fix can have a filename
+    # that is about two hours behind the archive's actual creation time on disk.
+    local_utc_offset = mtime_dt.utcoffset() or timedelta(0)
+    mtime_delta = mtime_dt - parsed_dt
+    if abs(mtime_delta) > LEGACY_FILENAME_MTIME_DRIFT and abs(mtime_delta - local_utc_offset) <= LEGACY_FILENAME_OFFSET_TOLERANCE:
+        return mtime_dt, "mtime_legacy"
+
+    return parsed_dt, "filename"
 
 
 def _is_user_backup(file_name: str) -> bool:
@@ -377,9 +396,7 @@ def list_backups(server) -> list[dict]:
     for f in files:
         try:
             st = f.stat()
-            created_at_dt = _parse_backup_timestamp(server.slug, f.name)
-            if created_at_dt is None:
-                created_at_dt = datetime.fromtimestamp(st.st_mtime, tz=timezone.get_current_timezone())
+            created_at_dt, timestamp_source = _resolve_backup_timestamp(server.slug, f.name, st)
             is_user = _is_user_backup(f.name)
             result.append({
                 "name":       f.name,
@@ -389,6 +406,7 @@ def list_backups(server) -> list[dict]:
                 "created_at_dt": created_at_dt,
                 "is_user":    is_user,
                 "kind":       "USER" if is_user else "AUTO",
+                "timestamp_source": timestamp_source,
             })
         except OSError:
             pass

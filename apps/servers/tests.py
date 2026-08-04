@@ -1,4 +1,5 @@
 import json
+import os
 import tarfile
 from collections import Counter
 from datetime import datetime
@@ -468,6 +469,58 @@ class AutoBackupScheduleTests(TestCase):
 
         self.assertFalse(result["ok"])
         self.assertEqual(list(self.backup_dir.glob("*.tar.gz")), [])
+
+    def test_list_backups_uses_mtime_for_legacy_utc_named_archives(self):
+        archive = self._create_archive(
+            self.now - timedelta(hours=4),
+            name=f"{self.server.slug}-20260803-064416.tar.gz",
+        )
+        actual_local_dt = timezone.make_aware(datetime(2026, 8, 3, 8, 44, 16), timezone.get_current_timezone())
+        epoch = actual_local_dt.timestamp()
+        os.utime(archive, (epoch, epoch))
+
+        backups = list_backups(self.server)
+
+        self.assertEqual(backups[0]["created_at_dt"], actual_local_dt)
+        self.assertEqual(backups[0]["timestamp_source"], "mtime_legacy")
+
+    def test_legacy_utc_named_archives_do_not_claim_extra_daily_bucket(self):
+        raw = [
+            ("20260804-065902", "local"),
+            ("20260804-035545", "local"),
+            ("20260804-005229", "local"),
+            ("20260803-214910", "local"),
+            ("20260803-184545", "local"),
+            ("20260803-154219", "local"),
+            ("20260803-123850", "local"),
+            ("20260803-093835", "local"),
+            ("20260803-064416", "utc_old"),
+            ("20260802-213405", "utc_old"),
+            ("20260802-182758", "utc_old_user"),
+            ("20260801-212050", "utc_old"),
+            ("20260731-234750", "utc_old"),
+            ("20260730-231858", "utc_old"),
+        ]
+        prague = ZoneInfo("Europe/Prague")
+        utc = ZoneInfo("UTC")
+
+        for stamp, kind in raw:
+            suffix = "-USER" if kind == "utc_old_user" else ""
+            archive = self.backup_dir / f"{self.server.slug}-{stamp}{suffix}.tar.gz"
+            archive.write_bytes(b"backup")
+            naive = datetime.strptime(stamp, "%Y%m%d-%H%M%S")
+            if kind.startswith("utc_old"):
+                actual_dt = naive.replace(tzinfo=utc).astimezone(prague)
+            else:
+                actual_dt = naive.replace(tzinfo=prague)
+            epoch = actual_dt.timestamp()
+            os.utime(archive, (epoch, epoch))
+
+        backups = list_backups(self.server)
+        kept = [item for item in backups if item["protected_by_rotation"]]
+
+        self.assertEqual(Counter(item["retention_bucket"] for item in kept), Counter({"intraday": 8, "daily": 3, "user": 1}))
+        self.assertEqual(len(kept), 12)
 
 
 class ServerEditTests(TestCase):
