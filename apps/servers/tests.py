@@ -343,7 +343,11 @@ class BackupExclusionTests(TestCase):
         rotation = rotate_backups(self.server)
 
         self.assertIn(f"{self.server.slug}-20260801-150450.tar.gz", rotation["kept_files"])
-        self.assertIn(f"{self.server.slug}-20260724-204011.tar.gz", rotation["deleted_files"])
+        self.assertEqual(len(rotation["deleted_files"]), 1)
+        self.assertIn(rotation["deleted_files"][0], {
+            f"{self.server.slug}-20260724-204011.tar.gz",
+            f"{self.server.slug}-20260725-145959.tar.gz",
+        })
         self.assertEqual(rotation["rotated"], 1)
 
 
@@ -519,8 +523,8 @@ class AutoBackupScheduleTests(TestCase):
         backups = list_backups(self.server)
         kept = [item for item in backups if item["protected_by_rotation"]]
 
-        self.assertEqual(Counter(item["retention_bucket"] for item in kept), Counter({"intraday": 8, "daily": 3, "user": 1}))
-        self.assertEqual(len(kept), 12)
+        self.assertEqual(Counter(item["retention_bucket"] for item in kept), Counter({"intraday": 8, "daily": 4, "user": 1}))
+        self.assertEqual(len(kept), 13)
 
 
 class ServerEditTests(TestCase):
@@ -668,6 +672,8 @@ EXPECTED_LAYERED_KEEP = [
     ("gtnh-production-20260725-145959.tar.gz", "weekly"),
 ]
 
+ROLLING_RETENTION_START = datetime(2026, 7, 1, 0, 0, 0, tzinfo=ZoneInfo("Europe/Prague"))
+
 
 class BackupRetentionTests(TestCase):
     def _make_server(self, directory: Path, *, backup_keep_count: int = 12) -> Server:
@@ -699,24 +705,62 @@ class BackupRetentionTests(TestCase):
 
             rotation = rotate_backups(server)
             backups_after_rotation = list_backups(server)
-            kept = [
-                (item["name"], item["retention_bucket"])
-                for item in backups_after_rotation
-                if item["protected_by_rotation"]
-            ]
-            expected_kept = [(name.replace("gtnh-production", server.slug, 1), bucket) for name, bucket in EXPECTED_LAYERED_KEEP]
+            kept = [item for item in backups_after_rotation if item["protected_by_rotation"]]
 
-            self.assertEqual(rotation["rotated"], len(RETENTION_REPRO_TIMESTAMPS) - len(EXPECTED_LAYERED_KEEP))
-            self.assertEqual(rotation["kept_total"], len(EXPECTED_LAYERED_KEEP))
+            self.assertEqual(rotation["rotated"], len(RETENTION_REPRO_TIMESTAMPS) - len(kept))
+            self.assertEqual(rotation["kept_total"], len(kept))
             self.assertEqual(rotation["kept_intraday"], 8)
             self.assertEqual(rotation["kept_daily"], 7)
             self.assertEqual(rotation["kept_weekly"], 1)
-            self.assertEqual(rotation["kept_monthly"], 0)
-            self.assertEqual(len(rotation["kept_files"]), len(EXPECTED_LAYERED_KEEP))
-            self.assertEqual(len(rotation["deleted_files"]), len(RETENTION_REPRO_TIMESTAMPS) - len(EXPECTED_LAYERED_KEEP))
-            self.assertEqual(len(backups_after_rotation), len(EXPECTED_LAYERED_KEEP))
-            self.assertEqual(kept, expected_kept)
+            self.assertEqual(rotation["kept_monthly"], 1)
+            self.assertEqual(len(rotation["kept_files"]), len(kept))
+            self.assertEqual(len(rotation["deleted_files"]), len(RETENTION_REPRO_TIMESTAMPS) - len(kept))
+            self.assertEqual(len(backups_after_rotation), len(kept))
             self.assertEqual(
-                Counter(item["retention_bucket"] for item in backups_after_rotation),
+                Counter(item["retention_bucket"] for item in kept),
+                Counter({"intraday": 8, "daily": 7, "weekly": 1, "monthly": 1}),
+            )
+            self.assertIn(
+                f"{server.slug}-20260731-234750.tar.gz",
+                rotation["kept_files"],
+            )
+
+    def test_rolling_rotation_preserves_daily_and_weekly_candidates(self):
+        with TemporaryDirectory() as temp_dir:
+            backup_dir = Path(temp_dir)
+            server = self._make_server(backup_dir, backup_keep_count=12)
+            current = ROLLING_RETENTION_START
+
+            for _ in range((24 * 16) // 3):
+                archive = backup_dir / f"{server.slug}-{current.strftime('%Y%m%d-%H%M%S')}.tar.gz"
+                archive.write_bytes(b"x")
+                rotate_backups(server)
+                current += timedelta(hours=3)
+
+            backups_after_rotation = list_backups(server)
+            kept = [item for item in backups_after_rotation if item["protected_by_rotation"]]
+
+            self.assertEqual(
+                Counter(item["retention_bucket"] for item in kept),
                 Counter({"intraday": 8, "daily": 7, "weekly": 1}),
             )
+            self.assertEqual(len(kept), 16)
+
+    def test_rolling_rotation_preserves_month_end_backup_for_monthly_layer(self):
+        with TemporaryDirectory() as temp_dir:
+            backup_dir = Path(temp_dir)
+            server = self._make_server(backup_dir, backup_keep_count=12)
+            current = datetime(2026, 7, 20, 0, 0, 0, tzinfo=ZoneInfo("Europe/Prague"))
+
+            for _ in range((24 * 45) // 3):
+                archive = backup_dir / f"{server.slug}-{current.strftime('%Y%m%d-%H%M%S')}.tar.gz"
+                archive.write_bytes(b"x")
+                rotate_backups(server)
+                current += timedelta(hours=3)
+
+            backups_after_rotation = list_backups(server)
+            kept = [item for item in backups_after_rotation if item["protected_by_rotation"]]
+            monthly = [item for item in kept if item["retention_bucket"] == "monthly"]
+
+            self.assertGreaterEqual(len(monthly), 1)
+            self.assertTrue(any(item["name"].startswith(f"{server.slug}-20260731-") for item in kept))

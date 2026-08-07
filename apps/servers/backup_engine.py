@@ -128,9 +128,23 @@ def _retention_label(bucket: str, is_kept: bool, is_user: bool) -> str:
     }.get(bucket, "Mimo rotaci")
 
 
+def _mark_bucket(item: dict, bucket: str, marked_names: set[str], summary: dict) -> bool:
+    if item["name"] in marked_names:
+        return False
+    marked_names.add(item["name"])
+    item["retention_bucket"] = bucket
+    summary["kept_total"] += 1
+    summary[f"kept_{bucket}"] += 1
+    return True
+
+
 def _annotate_backups(backups: list[dict]) -> tuple[list[dict], dict]:
-    annotated = []
-    newest_auto_dt = next((item["created_at_dt"] for item in backups if not item.get("is_user")), None)
+    annotated = [dict(backup) for backup in backups]
+    for item in annotated:
+        item["retention_bucket"] = None
+        item["protected_by_rotation"] = False
+
+    newest_auto_dt = next((item["created_at_dt"] for item in annotated if not item.get("is_user")), None)
     summary = {
         "kept_total": 0,
         "kept_user": 0,
@@ -141,76 +155,65 @@ def _annotate_backups(backups: list[dict]) -> tuple[list[dict], dict]:
     }
 
     if newest_auto_dt is None:
-        for backup in backups:
-            item = dict(backup)
+        for item in annotated:
             item["retention_bucket"] = "user" if item.get("is_user") else None
             item["retention_label"] = _retention_label("user", True, item.get("is_user", False))
             item["protected_by_rotation"] = bool(item.get("is_user"))
-            annotated.append(item)
             if item.get("is_user"):
                 summary["kept_total"] += 1
                 summary["kept_user"] += 1
         return annotated, summary
 
-    intraday_lower = newest_auto_dt - timedelta(hours=INTRADAY_KEEP_SLOTS * INTRADAY_SLOT_HOURS)
-    daily_lower = newest_auto_dt - timedelta(days=DAILY_KEEP_DAYS)
-    weekly_lower = newest_auto_dt - timedelta(days=WEEKLY_KEEP_WEEKS * 7)
-    monthly_lower = newest_auto_dt - timedelta(days=366)
-
+    newest_date = newest_auto_dt.date()
+    marked_names: set[str] = set()
     intraday_slots: set[tuple[str, int]] = set()
     daily_buckets: set[str] = set()
     weekly_buckets: set[int] = set()
     monthly_buckets: set[tuple[int, int]] = set()
 
-    for backup in backups:
-        item = dict(backup)
+    for item in annotated:
         dt = item["created_at_dt"]
         is_user = item.get("is_user", False)
 
         if is_user:
-            item["retention_bucket"] = "user"
-            item["retention_label"] = _retention_label("user", True, True)
-            item["protected_by_rotation"] = True
-            summary["kept_total"] += 1
-            summary["kept_user"] += 1
-            annotated.append(item)
+            _mark_bucket(item, "user", marked_names, summary)
             continue
 
-        age = newest_auto_dt - dt
+        day_age = (newest_date - dt.date()).days
         bucket = None
 
-        if intraday_lower <= dt <= newest_auto_dt:
+        if 0 <= (newest_auto_dt - dt).total_seconds() <= INTRADAY_KEEP_SLOTS * INTRADAY_SLOT_HOURS * 3600:
             slot_key = (dt.date().isoformat(), dt.hour // INTRADAY_SLOT_HOURS)
             if slot_key not in intraday_slots and len(intraday_slots) < INTRADAY_KEEP_SLOTS:
                 intraday_slots.add(slot_key)
                 bucket = "intraday"
 
-        if bucket is None and daily_lower <= dt < intraday_lower:
+        if bucket is None and 1 <= day_age <= DAILY_KEEP_DAYS:
             day_key = dt.date().isoformat()
             if day_key not in daily_buckets and len(daily_buckets) < DAILY_KEEP_DAYS:
                 daily_buckets.add(day_key)
                 bucket = "daily"
 
-        if bucket is None and weekly_lower <= dt < daily_lower:
-            week_index = int(age.total_seconds() // (7 * 24 * 3600))
+        if bucket is None and DAILY_KEEP_DAYS < day_age <= DAILY_KEEP_DAYS + (WEEKLY_KEEP_WEEKS * 7):
+            week_index = (day_age - DAILY_KEEP_DAYS - 1) // 7
             if week_index not in weekly_buckets and len(weekly_buckets) < WEEKLY_KEEP_WEEKS:
                 weekly_buckets.add(week_index)
                 bucket = "weekly"
 
-        if bucket is None and monthly_lower <= dt < weekly_lower:
+        if bucket is None:
             last_day = calendar.monthrange(dt.year, dt.month)[1]
             month_key = (dt.year, dt.month)
             if dt.day == last_day and month_key not in monthly_buckets and len(monthly_buckets) < MONTHLY_KEEP_MONTHS:
                 monthly_buckets.add(month_key)
                 bucket = "monthly"
 
-        item["retention_bucket"] = bucket
-        item["protected_by_rotation"] = bucket is not None
-        item["retention_label"] = _retention_label(bucket or "", bucket is not None, False)
         if bucket is not None:
-            summary["kept_total"] += 1
-            summary[f"kept_{bucket}"] += 1
-        annotated.append(item)
+            _mark_bucket(item, bucket, marked_names, summary)
+
+    for item in annotated:
+        bucket = item.get("retention_bucket")
+        item["protected_by_rotation"] = bucket is not None
+        item["retention_label"] = _retention_label(bucket or "", bucket is not None, item.get("is_user", False))
 
     return annotated, summary
 
