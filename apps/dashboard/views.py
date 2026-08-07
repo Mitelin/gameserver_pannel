@@ -225,11 +225,15 @@ def _json_shell_write(path: Path, json_payload: str) -> str:
 
 
 def _build_systemd_restart_command(services: list[str]) -> str:
+    systemctl_bin = shutil.which("systemctl") or "systemctl"
     commands = []
     for service in services:
         quoted = shlex.quote(service)
+        quoted_systemctl = shlex.quote(systemctl_bin)
         commands.append(f"echo '[update] restarting {service}'")
-        commands.append(f"(systemctl restart {quoted} || sudo -n systemctl restart {quoted} || true)")
+        commands.append(
+            f"(sudo -n {quoted_systemctl} restart {quoted} || {quoted_systemctl} restart {quoted} || true)"
+        )
     return "{ " + "; ".join(commands) + "; }"
 
 

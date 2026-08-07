@@ -76,13 +76,17 @@ class UpdateRestartPlanTests(SimpleTestCase):
         command = _build_update_shell_command()
 
         self.assertIn("[update] restarting worker.service", command)
-        self.assertIn("systemctl restart worker.service", command)
+        self.assertIn("sudo -n /bin/systemctl restart worker.service", command)
+        self.assertIn("/bin/systemctl restart worker.service", command)
         self.assertIn("[update] restarting alpha.service", command)
-        self.assertIn("systemctl restart alpha.service", command)
+        self.assertIn("sudo -n /bin/systemctl restart alpha.service", command)
+        self.assertIn("/bin/systemctl restart alpha.service", command)
         self.assertIn("[update] restarting beta.service", command)
-        self.assertIn("systemctl restart beta.service", command)
+        self.assertIn("sudo -n /bin/systemctl restart beta.service", command)
+        self.assertIn("/bin/systemctl restart beta.service", command)
         self.assertIn("[update] restarting web.service", command)
-        self.assertIn("systemctl restart web.service", command)
+        self.assertIn("sudo -n /bin/systemctl restart web.service", command)
+        self.assertIn("/bin/systemctl restart web.service", command)
 
     @patch("apps.dashboard.views.shutil.which", return_value="/bin/systemctl")
     @patch.dict(
