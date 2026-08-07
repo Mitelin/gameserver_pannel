@@ -838,6 +838,11 @@ def _watchdog_reconcile_desired_state(server):
 # Scheduler (plánované restarty)
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _scheduler_is_due(cron_expression, now, window, croniter_cls):
+    """Vrátí tuple (is_due, next_dt) pro daný cron v lokálním čase."""
+    next_dt = croniter_cls(cron_expression, now - window).get_next(type(now))
+    return next_dt <= now, next_dt
+
 def _scheduler_loop(stop_event: threading.Event):
     """Každých 30 s zkontroluje aktivní ScheduledRestart záznamy a spustí restart."""
     logger.info("Scheduler thread spuštěn.")
@@ -864,10 +869,9 @@ def _scheduler_loop(stop_event: threading.Event):
 
             for sched in active:
                 try:
-                    cron = Croniter(sched.cron_expression, now - window)
-                    next_dt = cron.get_next(type(now))
+                    is_due, next_dt = _scheduler_is_due(sched.cron_expression, now, window, Croniter)
                     # Spustit pokud by příštím krok byl v minulém okně (tj. měl jsme ho spustit)
-                    if next_dt <= now:
+                    if is_due:
                         # Zkontroluj jestli jsme to v tomto okně ještě nespustili
                         if sched.last_triggered_at and (now - sched.last_triggered_at) < window:
                             continue  # Už spuštěno v tomto okně
