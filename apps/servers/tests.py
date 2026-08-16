@@ -17,7 +17,7 @@ from django.utils import timezone
 from apps.audit.models import AuditEvent
 from apps.setup.models import BootstrapState
 from apps.servers.backup import AUTO_BACKUP_INTERVAL_HOURS, check_auto_backup_due, check_backup_status
-from apps.servers.backup_engine import create_backup, list_backups, rotate_backups
+from apps.servers.backup_engine import TOTAL_AUTO_KEEP, create_backup, list_backups, rotate_backups
 from apps.servers.forms import ServerForm
 from apps.servers.models import GameType, Server, ServerStatus
 
@@ -343,12 +343,38 @@ class BackupExclusionTests(TestCase):
         rotation = rotate_backups(self.server)
 
         self.assertIn(f"{self.server.slug}-20260801-150450.tar.gz", rotation["kept_files"])
-        self.assertEqual(len(rotation["deleted_files"]), 1)
-        self.assertIn(rotation["deleted_files"][0], {
-            f"{self.server.slug}-20260724-204011.tar.gz",
-            f"{self.server.slug}-20260725-145959.tar.gz",
-        })
-        self.assertEqual(rotation["rotated"], 1)
+        self.assertEqual(rotation["deleted_files"], [])
+        self.assertEqual(rotation["rotated"], 0)
+        self.assertEqual(rotation["kept_total"], 17)
+
+    def test_rotation_keeps_transition_backup_before_auto_capacity_is_full(self):
+        stamps = [
+            "20260810-215217",
+            "20260811-221939",
+            "20260812-225204",
+            "20260813-110557",
+            "20260813-140921",
+            "20260813-171245",
+            "20260813-201609",
+            "20260813-231935",
+            "20260814-022302",
+            "20260814-052634",
+            "20260814-083000",
+            "20260814-111611",
+            "20260814-142940",
+        ]
+
+        for stamp in stamps:
+            (self.backup_dir / f"{self.server.slug}-{stamp}.tar.gz").write_bytes(b"backup")
+
+        rotation = rotate_backups(self.server)
+        kept = [item for item in list_backups(self.server) if item["protected_by_rotation"]]
+
+        self.assertEqual(rotation["rotated"], 0)
+        self.assertEqual(rotation["kept_total"], len(stamps))
+        self.assertEqual(rotation["kept_reserve"], 1)
+        self.assertEqual(Counter(item["retention_bucket"] for item in kept), Counter({"intraday": 8, "daily": 4, "reserve": 1}))
+        self.assertIn(f"{self.server.slug}-20260813-110557.tar.gz", rotation["kept_files"])
 
 
 class AutoBackupScheduleTests(TestCase):
@@ -523,8 +549,8 @@ class AutoBackupScheduleTests(TestCase):
         backups = list_backups(self.server)
         kept = [item for item in backups if item["protected_by_rotation"]]
 
-        self.assertEqual(Counter(item["retention_bucket"] for item in kept), Counter({"intraday": 8, "daily": 4, "user": 1}))
-        self.assertEqual(len(kept), 13)
+        self.assertEqual(Counter(item["retention_bucket"] for item in kept), Counter({"intraday": 8, "daily": 4, "user": 1, "reserve": 1}))
+        self.assertEqual(len(kept), 14)
 
 
 class ServerEditTests(TestCase):
@@ -713,12 +739,13 @@ class BackupRetentionTests(TestCase):
             self.assertEqual(rotation["kept_daily"], 7)
             self.assertEqual(rotation["kept_weekly"], 1)
             self.assertEqual(rotation["kept_monthly"], 1)
+            self.assertEqual(rotation["kept_reserve"], TOTAL_AUTO_KEEP - 17)
             self.assertEqual(len(rotation["kept_files"]), len(kept))
             self.assertEqual(len(rotation["deleted_files"]), len(RETENTION_REPRO_TIMESTAMPS) - len(kept))
             self.assertEqual(len(backups_after_rotation), len(kept))
             self.assertEqual(
                 Counter(item["retention_bucket"] for item in kept),
-                Counter({"intraday": 8, "daily": 7, "weekly": 1, "monthly": 1}),
+                Counter({"intraday": 8, "daily": 7, "weekly": 1, "monthly": 1, "reserve": TOTAL_AUTO_KEEP - 17}),
             )
             self.assertIn(
                 f"{server.slug}-20260731-234750.tar.gz",
@@ -742,9 +769,9 @@ class BackupRetentionTests(TestCase):
 
             self.assertEqual(
                 Counter(item["retention_bucket"] for item in kept),
-                Counter({"intraday": 8, "daily": 7, "weekly": 1}),
+                Counter({"intraday": 8, "daily": 7, "weekly": 1, "reserve": TOTAL_AUTO_KEEP - 16}),
             )
-            self.assertEqual(len(kept), 16)
+            self.assertEqual(len(kept), TOTAL_AUTO_KEEP)
 
     def test_rolling_rotation_preserves_month_end_backup_for_monthly_layer(self):
         with TemporaryDirectory() as temp_dir:

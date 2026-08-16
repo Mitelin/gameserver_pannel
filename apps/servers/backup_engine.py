@@ -28,6 +28,7 @@ INTRADAY_SLOT_HOURS = 3
 DAILY_KEEP_DAYS = 7
 WEEKLY_KEEP_WEEKS = 4
 MONTHLY_KEEP_MONTHS = 12
+TOTAL_AUTO_KEEP = INTRADAY_KEEP_SLOTS + DAILY_KEEP_DAYS + WEEKLY_KEEP_WEEKS + MONTHLY_KEEP_MONTHS
 USER_BACKUP_SUFFIX = "USER"
 LEGACY_FILENAME_MTIME_DRIFT = timedelta(minutes=90)
 LEGACY_FILENAME_OFFSET_TOLERANCE = timedelta(minutes=30)
@@ -125,6 +126,7 @@ def _retention_label(bucket: str, is_kept: bool, is_user: bool) -> str:
         "daily": "Denní",
         "weekly": "Týdenní",
         "monthly": "Měsíční",
+        "reserve": "Rezerva",
     }.get(bucket, "Mimo rotaci")
 
 
@@ -152,6 +154,7 @@ def _annotate_backups(backups: list[dict]) -> tuple[list[dict], dict]:
         "kept_daily": 0,
         "kept_weekly": 0,
         "kept_monthly": 0,
+        "kept_reserve": 0,
     }
 
     if newest_auto_dt is None:
@@ -209,6 +212,22 @@ def _annotate_backups(backups: list[dict]) -> tuple[list[dict], dict]:
 
         if bucket is not None:
             _mark_bucket(item, bucket, marked_names, summary)
+
+    kept_auto_total = (
+        summary["kept_intraday"]
+        + summary["kept_daily"]
+        + summary["kept_weekly"]
+        + summary["kept_monthly"]
+    )
+    reserve_capacity = max(0, TOTAL_AUTO_KEEP - kept_auto_total)
+    if reserve_capacity:
+        for item in annotated:
+            if item.get("is_user") or item["name"] in marked_names:
+                continue
+            _mark_bucket(item, "reserve", marked_names, summary)
+            reserve_capacity -= 1
+            if reserve_capacity == 0:
+                break
 
     for item in annotated:
         bucket = item.get("retention_bucket")
@@ -333,6 +352,7 @@ def rotate_backups(server) -> dict:
             "kept_daily": 0,
             "kept_weekly": 0,
             "kept_monthly": 0,
+            "kept_reserve": 0,
             "kept_files": [],
             "deleted_files": [],
         }
@@ -344,7 +364,7 @@ def rotate_backups(server) -> dict:
     deleted_files = [backup["name"] for backup in to_delete]
 
     logger.info(
-        "[backup] Rotace summary %s: total=%d keep=%d delete=%d buckets=user:%d intraday:%d daily:%d weekly:%d monthly:%d",
+        "[backup] Rotace summary %s: total=%d keep=%d delete=%d buckets=user:%d intraday:%d daily:%d weekly:%d monthly:%d reserve:%d",
         server.slug,
         len(annotated),
         kept_counts["kept_total"],
@@ -354,6 +374,7 @@ def rotate_backups(server) -> dict:
         kept_counts["kept_daily"],
         kept_counts["kept_weekly"],
         kept_counts["kept_monthly"],
+        kept_counts["kept_reserve"],
     )
     if kept_backups:
         logger.info(
@@ -379,6 +400,7 @@ def rotate_backups(server) -> dict:
         "kept_daily": kept_counts["kept_daily"],
         "kept_weekly": kept_counts["kept_weekly"],
         "kept_monthly": kept_counts["kept_monthly"],
+        "kept_reserve": kept_counts["kept_reserve"],
         "kept_files": kept_files,
         "deleted_files": deleted_files,
     }
