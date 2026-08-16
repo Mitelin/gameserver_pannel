@@ -5,6 +5,7 @@ Multi-server overview dashboard + server detail.
 """
 import json
 import logging
+import mimetypes
 import os
 from pathlib import Path
 import platform
@@ -17,7 +18,7 @@ from django.contrib import messages
 from django.shortcuts import get_object_or_404, redirect, render
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied
-from django.http import JsonResponse
+from django.http import FileResponse, Http404, JsonResponse
 from django.utils import timezone
 
 from apps.servers.models import Server
@@ -480,6 +481,33 @@ def _build_backup_summary(backups: list[dict]) -> dict:
     }
 
 
+def _backup_kind_sort_rank(item: dict) -> int:
+    return 0 if item.get("kind") == "AUTO" else 1
+
+
+def _backup_layer_sort_rank(item: dict) -> int:
+    return {
+        "hourly": 0,
+        "daily": 1,
+        "weekly": 2,
+        "monthly": 3,
+        "user": 4,
+        "legacy": 5,
+    }.get(item.get("retention_bucket"), 99)
+
+
+def _sort_backups_for_overview(backups: list[dict]) -> list[dict]:
+    return sorted(
+        backups,
+        key=lambda item: (
+            _backup_kind_sort_rank(item),
+            -item["created_at_dt"].timestamp(),
+            _backup_layer_sort_rank(item),
+            item["name"].lower(),
+        ),
+    )
+
+
 @login_required
 def backup_overview(request, slug):
     server = get_object_or_404(Server, slug=slug, is_active=True)
@@ -503,13 +531,14 @@ def backup_overview(request, slug):
     from apps.servers.backup import check_backup_status
     from apps.servers.backup_engine import list_backups
 
-    backups = list_backups(server)
+    raw_backups = list_backups(server)
+    backups = _sort_backups_for_overview(raw_backups)
     ctx = {
         "server": server,
         "backups": backups,
         "backup_status": check_backup_status(server),
-        "summary": _build_backup_summary(backups),
-        "latest_backup": backups[0] if backups else None,
+        "summary": _build_backup_summary(raw_backups),
+        "latest_backup": max(raw_backups, key=lambda item: item["created_at_dt"]) if raw_backups else None,
     }
     return render(request, "dashboard/server_backups.html", ctx)
 
@@ -555,6 +584,32 @@ def backup_list_api(request, slug):
         raise PermissionDenied
     from apps.servers.backup_engine import list_backups
     return JsonResponse({"backups": list_backups(server)})
+
+
+@login_required
+def backup_download(request, slug):
+    server = get_object_or_404(Server, slug=slug, is_active=True)
+    if not can_view_server(request.user, server):
+        raise PermissionDenied
+
+    file_name = (request.GET.get("name") or "").strip()
+    if not file_name:
+        raise Http404("Soubor není zadán.")
+
+    from apps.servers.backup_engine import list_backups
+
+    backup = next((item for item in list_backups(server) if item["name"] == file_name), None)
+    if backup is None:
+        raise Http404("Záloha nebyla nalezena.")
+
+    path = Path(backup["path"])
+    if not path.exists() or not path.is_file():
+        raise Http404("Záloha nebyla nalezena.")
+
+    content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    response = FileResponse(path.open("rb"), content_type=content_type)
+    response["Content-Disposition"] = f'attachment; filename="{path.name}"'
+    return response
 
 
 @login_required

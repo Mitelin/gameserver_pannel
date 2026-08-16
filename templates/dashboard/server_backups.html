@@ -28,8 +28,15 @@
 .backup-table{width:100%;border-collapse:collapse;font-size:13px}
 .backup-table th,.backup-table td{padding:.7rem .65rem;border-bottom:1px solid var(--border);vertical-align:top;text-align:left}
 .backup-table th{font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--text-dim)}
+.sort-button{display:inline-flex;align-items:center;gap:.35rem;background:none;border:none;padding:0;color:inherit;font:inherit;letter-spacing:inherit;text-transform:inherit;cursor:pointer}
+.sort-button:hover{color:var(--text)}
+.sort-indicator{font-size:10px;color:var(--text-dim)}
 .backup-name{font-family:var(--font-mono);font-size:12px;word-break:break-all}
 .backup-path{font-size:11px;color:var(--text-dim);margin-top:.18rem;word-break:break-all}
+.backup-actions{width:1%;white-space:nowrap;text-align:right}
+.icon-link{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border:1px solid var(--border);border-radius:8px;color:var(--text-dim);text-decoration:none;background:rgba(255,255,255,.03)}
+.icon-link:hover{color:var(--text);border-color:rgba(79,142,247,.5);background:rgba(79,142,247,.08)}
+.icon-link svg{width:15px;height:15px;fill:currentColor}
 .badge{display:inline-flex;align-items:center;padding:.22rem .55rem;border-radius:999px;font-size:11px;font-weight:700;letter-spacing:.03em;text-transform:uppercase}
 .badge-auto{background:rgba(79,142,247,.14);color:#93c5fd}
 .badge-user{background:rgba(245,158,11,.14);color:#fcd34d}
@@ -80,16 +87,17 @@
         <table class="backup-table">
           <thead>
             <tr>
-              <th>Vytvořeno</th>
-              <th>Soubor</th>
-              <th>Typ</th>
-              <th>Vrstva</th>
-              <th>Velikost</th>
+              <th><button type="button" class="sort-button" data-sort-key="created" data-sort-direction="desc">Vytvořeno <span class="sort-indicator">▼</span></button></th>
+              <th><button type="button" class="sort-button" data-sort-key="name" data-sort-direction="asc">Soubor <span class="sort-indicator"></span></button></th>
+              <th><button type="button" class="sort-button" data-sort-key="kind" data-sort-direction="asc">Typ <span class="sort-indicator"></span></button></th>
+              <th><button type="button" class="sort-button" data-sort-key="layer" data-sort-direction="asc">Vrstva <span class="sort-indicator"></span></button></th>
+              <th><button type="button" class="sort-button" data-sort-key="size" data-sort-direction="desc">Velikost <span class="sort-indicator"></span></button></th>
+              <th class="backup-actions">Akce</th>
             </tr>
           </thead>
-          <tbody>
+          <tbody id="backup-table-body">
             {% for backup in backups %}
-            <tr class="{% if backup.is_user %}row-user{% endif %}">
+            <tr class="{% if backup.is_user %}row-user{% endif %}" data-created="{{ backup.created_at_dt|date:'U' }}" data-name="{{ backup.name|lower }}" data-kind="{{ backup.kind }}" data-kind-rank="{% if backup.kind == 'AUTO' %}0{% else %}1{% endif %}" data-layer="{{ backup.retention_label }}" data-layer-rank="{% if backup.retention_bucket == 'hourly' %}0{% elif backup.retention_bucket == 'daily' %}1{% elif backup.retention_bucket == 'weekly' %}2{% elif backup.retention_bucket == 'monthly' %}3{% elif backup.retention_bucket == 'user' %}4{% elif backup.retention_bucket == 'legacy' %}5{% else %}99{% endif %}" data-size="{{ backup.size_bytes }}">
               <td>{{ backup.created_at }}</td>
               <td>
                 <div class="backup-name">{{ backup.name }}</div>
@@ -102,10 +110,15 @@
                 <span class="badge {% if backup.retention_bucket == 'user' %}bucket-user{% elif backup.retention_bucket == 'hourly' %}bucket-hourly{% elif backup.retention_bucket == 'daily' %}bucket-daily{% elif backup.retention_bucket == 'weekly' %}bucket-weekly{% elif backup.retention_bucket == 'monthly' %}bucket-monthly{% elif backup.retention_bucket == 'legacy' %}bucket-legacy{% else %}bucket-expired{% endif %}">{{ backup.retention_label }}</span>
               </td>
               <td>{{ backup.size_bytes|filesizeformat }}</td>
+              <td class="backup-actions">
+                <a class="icon-link" href="{% url 'dashboard:backup_download' server.slug %}?name={{ backup.name|urlencode }}" title="Stáhnout {{ backup.name }}" aria-label="Stáhnout {{ backup.name }}">
+                  <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.5a.75.75 0 0 1 .75.75v6.19l2.22-2.22a.75.75 0 1 1 1.06 1.06L8.53 10.81a.75.75 0 0 1-1.06 0L3.97 7.31a.75.75 0 1 1 1.06-1.06l2.22 2.22V2.25A.75.75 0 0 1 8 1.5Zm-4.5 10a.75.75 0 0 1 .75.75v.25h7.5v-.25a.75.75 0 0 1 1.5 0V13A1.5 1.5 0 0 1 11.75 14.5h-7.5A1.5 1.5 0 0 1 2.75 13v-.75a.75.75 0 0 1 .75-.75Z"/></svg>
+                </a>
+              </td>
             </tr>
             {% empty %}
             <tr>
-              <td colspan="5" class="empty">V backup adresáři zatím není žádná záloha.</td>
+              <td colspan="6" class="empty">V backup adresáři zatím není žádná záloha.</td>
             </tr>
             {% endfor %}
           </tbody>
@@ -154,4 +167,65 @@
     </div>
   </div>
 </div>
+<script>
+(() => {
+  const tbody = document.getElementById('backup-table-body');
+  if (!tbody) return;
+
+  const sortButtons = Array.from(document.querySelectorAll('.sort-button'));
+  const defaultSort = { key: 'kind', direction: 'asc', tieBreaker: { key: 'created', direction: 'desc' } };
+
+  function compareValues(left, right, direction) {
+    if (left < right) return direction === 'asc' ? -1 : 1;
+    if (left > right) return direction === 'asc' ? 1 : -1;
+    return 0;
+  }
+
+  function readValue(row, key) {
+    if (key === 'kind') return Number(row.dataset.kindRank || '99');
+    if (key === 'layer') return Number(row.dataset.layerRank || '99');
+    if (key === 'created') return Number(row.dataset.created || '0');
+    if (key === 'size') return Number(row.dataset.size || '0');
+    if (key === 'name') return row.dataset.name || '';
+    return '';
+  }
+
+  function updateIndicators(activeKey, direction) {
+    sortButtons.forEach((button) => {
+      const indicator = button.querySelector('.sort-indicator');
+      if (!indicator) return;
+      indicator.textContent = button.dataset.sortKey === activeKey ? (direction === 'asc' ? '▲' : '▼') : '';
+    });
+  }
+
+  function sortRows(key, direction, tieBreaker) {
+    const rows = Array.from(tbody.querySelectorAll('tr[data-created]'));
+    rows.sort((left, right) => {
+      const primary = compareValues(readValue(left, key), readValue(right, key), direction);
+      if (primary !== 0) return primary;
+      if (tieBreaker) {
+        return compareValues(readValue(left, tieBreaker.key), readValue(right, tieBreaker.key), tieBreaker.direction);
+      }
+      return 0;
+    });
+    rows.forEach((row) => tbody.appendChild(row));
+    updateIndicators(key, direction);
+  }
+
+  sortButtons.forEach((button) => {
+    button.addEventListener('click', () => {
+      const nextDirection = button.dataset.currentDirection === 'asc' ? 'desc' : 'asc';
+      sortButtons.forEach((entry) => delete entry.dataset.currentDirection);
+      button.dataset.currentDirection = nextDirection;
+      sortRows(button.dataset.sortKey, nextDirection, { key: 'created', direction: 'desc' });
+    });
+  });
+
+  const defaultButton = sortButtons.find((button) => button.dataset.sortKey === defaultSort.key);
+  if (defaultButton) {
+    defaultButton.dataset.currentDirection = defaultSort.direction;
+  }
+  sortRows(defaultSort.key, defaultSort.direction, defaultSort.tieBreaker);
+})();
+</script>
 {% endblock %}

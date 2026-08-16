@@ -11,6 +11,7 @@ urlpatterns = [
     path("servers/<slug:slug>/",          views.server_detail,    name="server_detail"),
     path("servers/<slug:slug>/status/",        views.server_status_api, name="server_status_api"),
     path("servers/<slug:slug>/backups/",       views.backup_overview,   name="backup_overview"),
+    path("servers/<slug:slug>/backup/download/", views.backup_download, name="backup_download"),
     path("servers/<slug:slug>/backup-status/", views.backup_status_api, name="backup_status_api"),
     path("servers/<slug:slug>/log/download/",  views.log_download,      name="log_download"),
     path("servers/<slug:slug>/backup/create/", views.backup_create_api,  name="backup_create"),
