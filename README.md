@@ -282,6 +282,14 @@ Zprávy se odesílají příkazem `say` přímo do konzole serveru.
 
 - AUTO i USER serverové zálohy respektují nastavené vyloučené relativní cesty z pracovního adresáře.
 - Data vyloučená ze záloh se v těchto archivech neuloží a nepůjdou z nich obnovit.
+- Automatické vrstvy jsou oddělené typem souboru i podsložkou v backup adresáři:
+   - `hourly/`: `*-HOURLY.tar.gz`, každé 3 hodiny, uchovává 8 souborů.
+   - `daily/`: `*-DAILY.tar.gz`, jednou denně po 02:00, uchovává 7 souborů.
+   - `weekly/`: `*-WEEKLY.tar.gz`, jednou za 7 dní po 03:00, uchovává 4 soubory.
+   - `monthly/`: `*-MONTHLY.tar.gz`, poslední den měsíce po 04:00, uchovává 12 souborů.
+- Každá automatická vrstva maže pouze vlastní přebytečné soubory.
+- Ruční zálohy jsou v `user/` jako `*-USER.tar.gz` a automatická rotace je nikdy nemaže.
+- Starší neoznačené archivy v kořeni backup adresáře se zobrazují jako LEGACY a automatická rotace je nemaže.
 
 ### Automatická detekce Java
 

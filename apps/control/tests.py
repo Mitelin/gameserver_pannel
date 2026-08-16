@@ -217,63 +217,61 @@ class WorkerAutoBackupTests(TestCase):
         params.update(overrides)
         return Server.objects.create(**params)
 
-    def test_check_backup_calls_auto_backup_only_when_due(self):
+    def test_check_backup_creates_each_due_layer(self):
         server = self.make_server()
         due_result = {
             "ok": True,
-            "due": True,
-            "interval_hours": 3,
-            "message": "Nenalezena žádná panelová záloha; vytvářím první AUTO zálohu.",
+            "due_kinds": ["HOURLY", "DAILY", "WEEKLY"],
+            "layers": [],
+            "message": "Splatné vrstvy: HOURLY, DAILY, WEEKLY.",
         }
 
-        with mock.patch("apps.servers.backup.check_auto_backup_due", return_value=due_result), \
+        with mock.patch("apps.servers.backup.check_backup_layers_due", return_value=due_result), \
              mock.patch("apps.servers.backup_engine.create_backup", return_value={"ok": True, "message": "created"}) as create_backup_mock, \
              self.assertLogs("apps.control.management.commands.run_runtime_worker", level="INFO") as logs:
             _check_backup(server)
 
-        create_backup_mock.assert_called_once_with(server, is_user=False)
-        self.assertTrue(any("AUTO backup je splatný" in entry for entry in logs.output))
+        self.assertEqual(create_backup_mock.call_args_list, [
+            mock.call(server, backup_kind="HOURLY"),
+            mock.call(server, backup_kind="DAILY"),
+            mock.call(server, backup_kind="WEEKLY"),
+        ])
+        self.assertTrue(any("HOURLY backup je splatný" in entry for entry in logs.output))
 
-    def test_check_backup_skips_auto_backup_when_not_due(self):
+    def test_check_backup_skips_when_no_layer_is_due(self):
         server = self.make_server()
         due_result = {
             "ok": True,
-            "due": False,
-            "age_hours": 1.5,
-            "interval_hours": 3,
-            "newest_file": "test-20260724-103000-USER.tar.gz",
-            "newest_kind": "USER",
-            "message": "Poslední panelová záloha test-20260724-103000-USER.tar.gz (USER) je stará 1.5h; AUTO záloha zatím není splatná před 3h intervalem.",
+            "due_kinds": [],
+            "layers": [],
+            "message": "Splatné vrstvy: žádné.",
         }
 
-        with mock.patch("apps.servers.backup.check_auto_backup_due", return_value=due_result), \
+        with mock.patch("apps.servers.backup.check_backup_layers_due", return_value=due_result), \
              mock.patch("apps.servers.backup_engine.create_backup") as create_backup_mock, \
              self.assertLogs("apps.control.management.commands.run_runtime_worker", level="INFO") as logs:
             _check_backup(server)
 
         create_backup_mock.assert_not_called()
-        self.assertTrue(any("AUTO backup zatím není splatný" in entry for entry in logs.output))
+        self.assertTrue(any("Žádná backup vrstva není splatná" in entry for entry in logs.output))
 
     def test_check_backup_logs_and_audits_create_failure_without_crashing(self):
         server = self.make_server()
         due_result = {
             "ok": True,
-            "due": True,
-            "age_hours": 4.0,
-            "interval_hours": 3,
-            "newest_file": "test-20260724-080000.tar.gz",
-            "newest_kind": "AUTO",
-            "message": "Poslední panelová záloha test-20260724-080000.tar.gz (AUTO) je stará 4.0h; překročen 3h interval, AUTO záloha je splatná.",
+            "due_kinds": ["WEEKLY"],
+            "layers": [],
+            "message": "Splatné vrstvy: WEEKLY.",
         }
         backup_result = {"ok": False, "message": "disk full"}
 
-        with mock.patch("apps.servers.backup.check_auto_backup_due", return_value=due_result), \
+        with mock.patch("apps.servers.backup.check_backup_layers_due", return_value=due_result), \
              mock.patch("apps.servers.backup_engine.create_backup", return_value=backup_result), \
              self.assertLogs("apps.control.management.commands.run_runtime_worker", level="ERROR") as logs:
             _check_backup(server)
 
         event = AuditEvent.objects.get(server=server, event_type="server.backup.auto_failed")
         self.assertEqual(event.message, "disk full")
-        self.assertEqual(event.payload_json["due"]["newest_file"], "test-20260724-080000.tar.gz")
+        self.assertEqual(event.payload_json["backup_kind"], "WEEKLY")
         self.assertEqual(event.payload_json["auto_backup"]["message"], "disk full")
-        self.assertTrue(any("AUTO backup selhal: disk full" in entry for entry in logs.output))
+        self.assertTrue(any("WEEKLY backup selhal: disk full" in entry for entry in logs.output))

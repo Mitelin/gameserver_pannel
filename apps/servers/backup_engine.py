@@ -4,17 +4,15 @@ apps/servers/backup_engine.py
 Vytváří reálné zálohy working_directory serveru jako tar.gz archiv.
 
 Funkce:
-    - create_backup(server)  – zazipuje working_directory → backup_directory/slug-YYYYMMDD-HHMMSS[-USER].tar.gz
-    - rotate_backups(server) – aplikuje pevnou 4úrovňovou rotaci
+    - create_backup(server)  – vytvoří archiv s explicitním typem v podsložce vrstvy
+    - rotate_backups(server) – každou automatickou vrstvu rotuje samostatně
     - list_backups(server)   – vrátí seznam existujících záloh s metadaty
 """
 import tarfile
 import logging
 import threading
-from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
-import calendar
 from os import stat_result
 
 from django.utils import timezone
@@ -28,8 +26,31 @@ INTRADAY_SLOT_HOURS = 3
 DAILY_KEEP_DAYS = 7
 WEEKLY_KEEP_WEEKS = 4
 MONTHLY_KEEP_MONTHS = 12
-TOTAL_AUTO_KEEP = INTRADAY_KEEP_SLOTS + DAILY_KEEP_DAYS + WEEKLY_KEEP_WEEKS + MONTHLY_KEEP_MONTHS
-USER_BACKUP_SUFFIX = "USER"
+BACKUP_KIND_HOURLY = "HOURLY"
+BACKUP_KIND_DAILY = "DAILY"
+BACKUP_KIND_WEEKLY = "WEEKLY"
+BACKUP_KIND_MONTHLY = "MONTHLY"
+BACKUP_KIND_USER = "USER"
+BACKUP_KIND_LEGACY = "LEGACY"
+AUTO_BACKUP_KINDS = (
+    BACKUP_KIND_HOURLY,
+    BACKUP_KIND_DAILY,
+    BACKUP_KIND_WEEKLY,
+    BACKUP_KIND_MONTHLY,
+)
+BACKUP_KEEP_LIMITS = {
+    BACKUP_KIND_HOURLY: INTRADAY_KEEP_SLOTS,
+    BACKUP_KIND_DAILY: DAILY_KEEP_DAYS,
+    BACKUP_KIND_WEEKLY: WEEKLY_KEEP_WEEKS,
+    BACKUP_KIND_MONTHLY: MONTHLY_KEEP_MONTHS,
+}
+BACKUP_SUBDIRECTORIES = {
+    BACKUP_KIND_HOURLY: "hourly",
+    BACKUP_KIND_DAILY: "daily",
+    BACKUP_KIND_WEEKLY: "weekly",
+    BACKUP_KIND_MONTHLY: "monthly",
+    BACKUP_KIND_USER: "user",
+}
 LEGACY_FILENAME_MTIME_DRIFT = timedelta(minutes=90)
 LEGACY_FILENAME_OFFSET_TOLERANCE = timedelta(minutes=30)
 
@@ -61,6 +82,8 @@ def _build_tar_filter(src_dir: Path, backup_dir: Path, dest: Path, server_slug: 
             return None
         if backup_inside_source and absolute.is_relative_to(backup_root):
             return None
+        if backup_equals_source and relative.parts and relative.parts[0] in BACKUP_SUBDIRECTORIES.values():
+            return None
         if backup_equals_source and _is_backup_archive_for_server(absolute, server_slug):
             return None
         for excluded_root in excluded_roots:
@@ -77,7 +100,7 @@ def _archive_server_files(src_dir: Path, backup_dir: Path, dest: Path, server_sl
         tar.add(str(src_dir), arcname=server_slug, filter=tar_filter)
 
 
-def _parse_backup_timestamp(server_slug: str, file_name: str):
+def _parse_backup_filename(server_slug: str, file_name: str):
     prefix = f"{server_slug}-"
     suffix = ".tar.gz"
     if not file_name.startswith(prefix) or not file_name.endswith(suffix):
@@ -91,16 +114,26 @@ def _parse_backup_timestamp(server_slug: str, file_name: str):
     ts = "-".join(parts[:2])
     try:
         parsed = datetime.strptime(ts, "%Y%m%d-%H%M%S")
-        return timezone.make_aware(parsed, timezone.get_current_timezone())
+        created_at = timezone.make_aware(parsed, timezone.get_current_timezone())
     except ValueError:
         return None
 
+    raw_kind = "-".join(parts[2:]).upper()
+    if raw_kind in (*AUTO_BACKUP_KINDS, BACKUP_KIND_USER):
+        backup_kind = raw_kind
+    elif not raw_kind:
+        backup_kind = BACKUP_KIND_LEGACY
+    else:
+        return None
+    return created_at, backup_kind
+
 
 def _resolve_backup_timestamp(server_slug: str, file_name: str, file_stat: stat_result):
-    parsed_dt = _parse_backup_timestamp(server_slug, file_name)
+    parsed = _parse_backup_filename(server_slug, file_name)
     mtime_dt = datetime.fromtimestamp(file_stat.st_mtime, tz=timezone.get_current_timezone())
-    if parsed_dt is None:
+    if parsed is None:
         return mtime_dt, "mtime"
+    parsed_dt, _backup_kind = parsed
 
     # Legacy archives created before the local-time filename fix can have a filename
     # that is about two hours behind the archive's actual creation time on disk.
@@ -112,127 +145,53 @@ def _resolve_backup_timestamp(server_slug: str, file_name: str, file_stat: stat_
     return parsed_dt, "filename"
 
 
-def _is_user_backup(file_name: str) -> bool:
-    return file_name.upper().endswith(f"-{USER_BACKUP_SUFFIX}.TAR.GZ")
-
-
-def _retention_label(bucket: str, is_kept: bool, is_user: bool) -> str:
-    if is_user:
-        return "USER"
-    if not is_kept:
-        return "Mimo rotaci"
+def _retention_label(backup_kind: str) -> str:
     return {
-        "intraday": "Denní 3h",
-        "daily": "Denní",
-        "weekly": "Týdenní",
-        "monthly": "Měsíční",
-        "reserve": "Rezerva",
-    }.get(bucket, "Mimo rotaci")
-
-
-def _mark_bucket(item: dict, bucket: str, marked_names: set[str], summary: dict) -> bool:
-    if item["name"] in marked_names:
-        return False
-    marked_names.add(item["name"])
-    item["retention_bucket"] = bucket
-    summary["kept_total"] += 1
-    summary[f"kept_{bucket}"] += 1
-    return True
+        BACKUP_KIND_HOURLY: "Hodinová 3h",
+        BACKUP_KIND_DAILY: "Denní",
+        BACKUP_KIND_WEEKLY: "Týdenní",
+        BACKUP_KIND_MONTHLY: "Měsíční",
+        BACKUP_KIND_USER: "USER",
+        BACKUP_KIND_LEGACY: "Legacy AUTO",
+    }.get(backup_kind, "Neznámá")
 
 
 def _annotate_backups(backups: list[dict]) -> tuple[list[dict], dict]:
     annotated = [dict(backup) for backup in backups]
-    for item in annotated:
-        item["retention_bucket"] = None
-        item["protected_by_rotation"] = False
-
-    newest_auto_dt = next((item["created_at_dt"] for item in annotated if not item.get("is_user")), None)
     summary = {
         "kept_total": 0,
         "kept_user": 0,
-        "kept_intraday": 0,
+        "kept_hourly": 0,
         "kept_daily": 0,
         "kept_weekly": 0,
         "kept_monthly": 0,
-        "kept_reserve": 0,
+        "kept_legacy": 0,
     }
-
-    if newest_auto_dt is None:
-        for item in annotated:
-            item["retention_bucket"] = "user" if item.get("is_user") else None
-            item["retention_label"] = _retention_label("user", True, item.get("is_user", False))
-            item["protected_by_rotation"] = bool(item.get("is_user"))
-            if item.get("is_user"):
-                summary["kept_total"] += 1
-                summary["kept_user"] += 1
-        return annotated, summary
-
-    newest_date = newest_auto_dt.date()
-    marked_names: set[str] = set()
-    intraday_slots: set[tuple[str, int]] = set()
-    daily_buckets: set[str] = set()
-    weekly_buckets: set[int] = set()
-    monthly_buckets: set[tuple[int, int]] = set()
-
+    kept_per_kind = {backup_kind: 0 for backup_kind in AUTO_BACKUP_KINDS}
     for item in annotated:
-        dt = item["created_at_dt"]
-        is_user = item.get("is_user", False)
+        backup_kind = item["backup_kind"]
+        protected = backup_kind in (BACKUP_KIND_USER, BACKUP_KIND_LEGACY)
+        if backup_kind in AUTO_BACKUP_KINDS:
+            protected = kept_per_kind[backup_kind] < BACKUP_KEEP_LIMITS[backup_kind]
+            if protected:
+                kept_per_kind[backup_kind] += 1
 
-        if is_user:
-            _mark_bucket(item, "user", marked_names, summary)
+        item["protected_by_rotation"] = protected
+        item["retention_bucket"] = backup_kind.lower()
+        item["retention_label"] = _retention_label(backup_kind)
+        if not protected:
             continue
 
-        day_age = (newest_date - dt.date()).days
-        bucket = None
-
-        if 0 <= (newest_auto_dt - dt).total_seconds() <= INTRADAY_KEEP_SLOTS * INTRADAY_SLOT_HOURS * 3600:
-            slot_key = (dt.date().isoformat(), dt.hour // INTRADAY_SLOT_HOURS)
-            if slot_key not in intraday_slots and len(intraday_slots) < INTRADAY_KEEP_SLOTS:
-                intraday_slots.add(slot_key)
-                bucket = "intraday"
-
-        if bucket is None and 1 <= day_age <= DAILY_KEEP_DAYS:
-            day_key = dt.date().isoformat()
-            if day_key not in daily_buckets and len(daily_buckets) < DAILY_KEEP_DAYS:
-                daily_buckets.add(day_key)
-                bucket = "daily"
-
-        if bucket is None and DAILY_KEEP_DAYS < day_age <= DAILY_KEEP_DAYS + (WEEKLY_KEEP_WEEKS * 7):
-            week_index = (day_age - DAILY_KEEP_DAYS - 1) // 7
-            if week_index not in weekly_buckets and len(weekly_buckets) < WEEKLY_KEEP_WEEKS:
-                weekly_buckets.add(week_index)
-                bucket = "weekly"
-
-        if bucket is None:
-            last_day = calendar.monthrange(dt.year, dt.month)[1]
-            month_key = (dt.year, dt.month)
-            if dt.day == last_day and month_key not in monthly_buckets and len(monthly_buckets) < MONTHLY_KEEP_MONTHS:
-                monthly_buckets.add(month_key)
-                bucket = "monthly"
-
-        if bucket is not None:
-            _mark_bucket(item, bucket, marked_names, summary)
-
-    kept_auto_total = (
-        summary["kept_intraday"]
-        + summary["kept_daily"]
-        + summary["kept_weekly"]
-        + summary["kept_monthly"]
-    )
-    reserve_capacity = max(0, TOTAL_AUTO_KEEP - kept_auto_total)
-    if reserve_capacity:
-        for item in annotated:
-            if item.get("is_user") or item["name"] in marked_names:
-                continue
-            _mark_bucket(item, "reserve", marked_names, summary)
-            reserve_capacity -= 1
-            if reserve_capacity == 0:
-                break
-
-    for item in annotated:
-        bucket = item.get("retention_bucket")
-        item["protected_by_rotation"] = bucket is not None
-        item["retention_label"] = _retention_label(bucket or "", bucket is not None, item.get("is_user", False))
+        summary["kept_total"] += 1
+        summary_key = {
+            BACKUP_KIND_HOURLY: "kept_hourly",
+            BACKUP_KIND_DAILY: "kept_daily",
+            BACKUP_KIND_WEEKLY: "kept_weekly",
+            BACKUP_KIND_MONTHLY: "kept_monthly",
+            BACKUP_KIND_USER: "kept_user",
+            BACKUP_KIND_LEGACY: "kept_legacy",
+        }[backup_kind]
+        summary[summary_key] += 1
 
     return annotated, summary
 
@@ -248,7 +207,7 @@ def _get_lock(slug: str) -> threading.Lock:
         return _backup_locks[slug]
 
 
-def create_backup(server, *, is_user: bool = False) -> dict:
+def create_backup(server, *, backup_kind: str = BACKUP_KIND_HOURLY) -> dict:
     """
     Vytvoří zálohu working_directory jako tar.gz.
     Vrátí dict: {"ok": bool, "message": str, "path": str, "size_bytes": int}
@@ -258,12 +217,16 @@ def create_backup(server, *, is_user: bool = False) -> dict:
         return {"ok": False, "message": "Záloha pro tento server již probíhá."}
 
     try:
-        return _do_backup(server, is_user=is_user)
+        return _do_backup(server, backup_kind=backup_kind)
     finally:
         lock.release()
 
 
-def _do_backup(server, *, is_user: bool = False) -> dict:
+def _do_backup(server, *, backup_kind: str) -> dict:
+    backup_kind = backup_kind.upper()
+    if backup_kind not in (*AUTO_BACKUP_KINDS, BACKUP_KIND_USER):
+        return {"ok": False, "message": f"Neznámý typ zálohy: {backup_kind}"}
+
     src_dir    = Path(server.working_directory)
     backup_dir = Path(server.backup_directory) if server.backup_directory else None
 
@@ -279,9 +242,13 @@ def _do_backup(server, *, is_user: bool = False) -> dict:
         return {"ok": False, "message": f"Nelze vytvořit backup adresář: {e}"}
 
     ts = _current_backup_timestamp()
-    suffix = f"-{USER_BACKUP_SUFFIX}" if is_user else ""
-    filename = f"{server.slug}-{ts}{suffix}.tar.gz"
-    dest     = backup_dir / filename
+    filename = f"{server.slug}-{ts}-{backup_kind}.tar.gz"
+    kind_dir = backup_dir / BACKUP_SUBDIRECTORIES[backup_kind]
+    try:
+        kind_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        return {"ok": False, "message": f"Nelze vytvořit adresář vrstvy {backup_kind}: {exc}"}
+    dest = kind_dir / filename
 
     try:
         excluded_relative_paths = normalize_backup_exclude_paths(str(src_dir), getattr(server, "backup_exclude_paths", ""))
@@ -302,17 +269,18 @@ def _do_backup(server, *, is_user: bool = False) -> dict:
         logger.info("[backup] Záloha dokončena: %s (%.1f MB)", filename, size / 1048576)
 
         # Rotace
-        rotation_result = rotate_backups(server)
+        rotation_result = rotate_backups(server, backup_kind=backup_kind)
 
         from apps.audit.models import AuditEvent
+        is_user = backup_kind == BACKUP_KIND_USER
         event_type = "server.backup.user_created" if is_user else "server.backup.created"
-        kind_label = "USER" if is_user else "AUTO"
+        kind_label = backup_kind
         AuditEvent.objects.create(
             server=server,
             event_type=event_type,
             severity="info",
             message=f"{kind_label} záloha vytvořena: {filename} ({size/1048576:.1f} MB)",
-            payload_json={"file": filename, "size_bytes": size, "is_user": is_user, **rotation_result},
+            payload_json={"file": filename, "size_bytes": size, "backup_kind": backup_kind, "is_user": is_user, **rotation_result},
         )
 
         return {
@@ -321,6 +289,7 @@ def _do_backup(server, *, is_user: bool = False) -> dict:
             "path":       str(dest),
             "filename":   filename,
             "size_bytes": size,
+            "backup_kind": backup_kind,
             "is_user":    is_user,
         }
 
@@ -334,47 +303,58 @@ def _do_backup(server, *, is_user: bool = False) -> dict:
         return {"ok": False, "message": f"Záloha selhala: {exc}"}
 
 
-def rotate_backups(server) -> dict:
+def rotate_backups(server, *, backup_kind: str | None = None) -> dict:
     """
-    Aplikuje pevnou 4úrovňovou rotaci:
-      - 8 intradenních slotů po 3 hodinách za posledních 24h
-      - 7 denních záloh za posledních 7 dnů
-      - 4 týdenní zálohy po 7 dnech
-      - 12 měsíčních záloh z posledního dne měsíce
+        Rotuje explicitně označené vrstvy nezávisle:
+            - 8 HOURLY
+            - 7 DAILY
+            - 4 WEEKLY
+            - 12 MONTHLY
+        USER a LEGACY soubory nikdy nemaže.
     """
+    if backup_kind is not None:
+        backup_kind = backup_kind.upper()
+        if backup_kind not in (*AUTO_BACKUP_KINDS, BACKUP_KIND_USER, BACKUP_KIND_LEGACY):
+            raise ValueError(f"Neznámý typ zálohy pro rotaci: {backup_kind}")
+
     backups = list_backups(server)
     if not backups:
         return {
             "rotated": 0,
             "kept_total": 0,
             "kept_user": 0,
-            "kept_intraday": 0,
+            "kept_hourly": 0,
             "kept_daily": 0,
             "kept_weekly": 0,
             "kept_monthly": 0,
-            "kept_reserve": 0,
+            "kept_legacy": 0,
             "kept_files": [],
             "deleted_files": [],
         }
 
     annotated, kept_counts = _annotate_backups(backups)
     kept_backups = [backup for backup in annotated if backup["protected_by_rotation"]]
-    to_delete = [backup for backup in annotated if not backup["protected_by_rotation"]]
+    to_delete = [
+        backup
+        for backup in annotated
+        if not backup["protected_by_rotation"]
+        and (backup_kind is None or backup["backup_kind"] == backup_kind)
+    ]
     kept_files = [backup["name"] for backup in kept_backups]
     deleted_files = [backup["name"] for backup in to_delete]
 
     logger.info(
-        "[backup] Rotace summary %s: total=%d keep=%d delete=%d buckets=user:%d intraday:%d daily:%d weekly:%d monthly:%d reserve:%d",
+        "[backup] Rotace summary %s: total=%d keep=%d delete=%d buckets=user:%d hourly:%d daily:%d weekly:%d monthly:%d legacy:%d",
         server.slug,
         len(annotated),
         kept_counts["kept_total"],
         len(to_delete),
         kept_counts["kept_user"],
-        kept_counts["kept_intraday"],
+        kept_counts["kept_hourly"],
         kept_counts["kept_daily"],
         kept_counts["kept_weekly"],
         kept_counts["kept_monthly"],
-        kept_counts["kept_reserve"],
+        kept_counts["kept_legacy"],
     )
     if kept_backups:
         logger.info(
@@ -396,11 +376,11 @@ def rotate_backups(server) -> dict:
         "rotated": deleted,
         "kept_total": kept_counts["kept_total"],
         "kept_user": kept_counts["kept_user"],
-        "kept_intraday": kept_counts["kept_intraday"],
+        "kept_hourly": kept_counts["kept_hourly"],
         "kept_daily": kept_counts["kept_daily"],
         "kept_weekly": kept_counts["kept_weekly"],
         "kept_monthly": kept_counts["kept_monthly"],
-        "kept_reserve": kept_counts["kept_reserve"],
+        "kept_legacy": kept_counts["kept_legacy"],
         "kept_files": kept_files,
         "deleted_files": deleted_files,
     }
@@ -416,13 +396,17 @@ def list_backups(server) -> list[dict]:
         return []
 
     pattern = f"{server.slug}-*.tar.gz"
-    files = sorted(backup_dir.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True)
+    files = sorted(backup_dir.rglob(pattern), key=lambda p: p.stat().st_mtime, reverse=True)
     result = []
     for f in files:
         try:
             st = f.stat()
             created_at_dt, timestamp_source = _resolve_backup_timestamp(server.slug, f.name, st)
-            is_user = _is_user_backup(f.name)
+            parsed = _parse_backup_filename(server.slug, f.name)
+            if parsed is None:
+                continue
+            _parsed_dt, backup_kind = parsed
+            is_user = backup_kind == BACKUP_KIND_USER
             result.append({
                 "name":       f.name,
                 "path":       str(f),
@@ -431,6 +415,7 @@ def list_backups(server) -> list[dict]:
                 "created_at_dt": created_at_dt,
                 "is_user":    is_user,
                 "kind":       "USER" if is_user else "AUTO",
+                "backup_kind": backup_kind,
                 "timestamp_source": timestamp_source,
             })
         except OSError:

@@ -593,38 +593,40 @@ def _watchdog_loop(stop_event: threading.Event):
 
 
 def _check_backup(server):
-    """Zkontroluje stáří backupů, pokud jsou staré – spustí novou zálohu."""
-    from apps.servers.backup import check_auto_backup_due
+    """Spustí každou splatnou automatickou backup vrstvu samostatně."""
+    from apps.servers.backup import check_backup_layers_due
     from apps.servers.backup_engine import create_backup
     from apps.audit.models import AuditEvent
 
-    result = check_auto_backup_due(server)
+    result = check_backup_layers_due(server)
     if result.get("ok") is None:
         return
     if result.get("ok") is False:
-        logger.warning("[%s] AUTO backup nelze vyhodnotit: %s", server.slug, result.get("message"))
+        logger.warning("[%s] Backup vrstvy nelze vyhodnotit: %s", server.slug, result.get("message"))
         return
-    if not result.get("due"):
-        logger.info("[%s] AUTO backup zatím není splatný: %s", server.slug, result.get("message"))
-        return
-
-    logger.info("[%s] AUTO backup je splatný: %s", server.slug, result.get("message"))
-    backup_result = create_backup(server, is_user=False)
-    if backup_result.get("ok"):
+    due_kinds = result.get("due_kinds", [])
+    if not due_kinds:
+        logger.info("[%s] Žádná backup vrstva není splatná.", server.slug)
         return
 
-    if backup_result.get("message") == "Záloha pro tento server již probíhá.":
-        logger.info("[%s] AUTO backup přeskočen: %s", server.slug, backup_result.get("message"))
-        return
+    for backup_kind in due_kinds:
+        logger.info("[%s] %s backup je splatný.", server.slug, backup_kind)
+        backup_result = create_backup(server, backup_kind=backup_kind)
+        if backup_result.get("ok"):
+            continue
 
-    logger.error("[%s] AUTO backup selhal: %s", server.slug, backup_result.get("message"))
-    AuditEvent.objects.create(
-        server=server,
-        event_type="server.backup.auto_failed",
-        severity="warning",
-        message=backup_result.get("message", "AUTO záloha selhala."),
-        payload_json={"due": result, "auto_backup": backup_result},
-    )
+        if backup_result.get("message") == "Záloha pro tento server již probíhá.":
+            logger.info("[%s] %s backup přeskočen: %s", server.slug, backup_kind, backup_result.get("message"))
+            break
+
+        logger.error("[%s] %s backup selhal: %s", server.slug, backup_kind, backup_result.get("message"))
+        AuditEvent.objects.create(
+            server=server,
+            event_type="server.backup.auto_failed",
+            severity="warning",
+            message=backup_result.get("message", f"{backup_kind} záloha selhala."),
+            payload_json={"backup_kind": backup_kind, "due": result, "auto_backup": backup_result},
+        )
 
 
 def _watchdog_check(server, backend, channel_layer):

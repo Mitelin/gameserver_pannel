@@ -36,10 +36,11 @@ def main() -> int:
     print(
         "buckets="
         f"user:{bucket_counts.get('user', 0)} "
-        f"intraday:{bucket_counts.get('intraday', 0)} "
+        f"hourly:{bucket_counts.get('hourly', 0)} "
         f"daily:{bucket_counts.get('daily', 0)} "
         f"weekly:{bucket_counts.get('weekly', 0)} "
-        f"monthly:{bucket_counts.get('monthly', 0)}"
+        f"monthly:{bucket_counts.get('monthly', 0)} "
+        f"legacy:{bucket_counts.get('legacy', 0)}"
     )
 
     print("KEEP")

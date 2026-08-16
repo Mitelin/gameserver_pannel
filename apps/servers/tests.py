@@ -16,8 +16,17 @@ from django.utils import timezone
 
 from apps.audit.models import AuditEvent
 from apps.setup.models import BootstrapState
-from apps.servers.backup import AUTO_BACKUP_INTERVAL_HOURS, check_auto_backup_due, check_backup_status
-from apps.servers.backup_engine import TOTAL_AUTO_KEEP, create_backup, list_backups, rotate_backups
+from apps.servers.backup import AUTO_BACKUP_INTERVAL_HOURS, check_auto_backup_due, check_backup_layers_due, check_backup_status
+from apps.servers.backup_engine import (
+    BACKUP_KIND_DAILY,
+    BACKUP_KIND_HOURLY,
+    BACKUP_KIND_MONTHLY,
+    BACKUP_KIND_USER,
+    BACKUP_KIND_WEEKLY,
+    create_backup,
+    list_backups,
+    rotate_backups,
+)
 from apps.servers.forms import ServerForm
 from apps.servers.models import GameType, Server, ServerStatus
 
@@ -277,7 +286,7 @@ class BackupExclusionTests(TestCase):
             return tar.getnames()
 
     def test_auto_backup_respects_backup_exclusions_and_preserves_other_content(self):
-        result = create_backup(self.server, is_user=False)
+        result = create_backup(self.server, backup_kind=BACKUP_KIND_HOURLY)
 
         self.assertTrue(result["ok"], result)
         names = self._archive_members(result["path"])
@@ -289,7 +298,7 @@ class BackupExclusionTests(TestCase):
         self.assertNotIn("gtnh-production/backups/nested-should-not-archive.txt", names)
 
     def test_user_backup_respects_backup_exclusions(self):
-        result = create_backup(self.server, is_user=True)
+        result = create_backup(self.server, backup_kind=BACKUP_KIND_USER)
 
         self.assertTrue(result["ok"], result)
         names = self._archive_members(result["path"])
@@ -300,7 +309,7 @@ class BackupExclusionTests(TestCase):
         self.server.backup_exclude_paths = "/etc/passwd"
         self.server.save(update_fields=["backup_exclude_paths"])
 
-        result = create_backup(self.server, is_user=False)
+        result = create_backup(self.server, backup_kind=BACKUP_KIND_HOURLY)
 
         self.assertFalse(result["ok"])
         self.assertEqual(list(self.backup_dir.glob("*.tar.gz")), [])
@@ -313,10 +322,27 @@ class BackupExclusionTests(TestCase):
 
         with mock.patch("apps.servers.backup_engine.timezone.now", return_value=fixed_utc_now), \
              mock.patch("apps.servers.backup_engine._archive_server_files", side_effect=_fake_archive):
-            result = create_backup(self.server, is_user=False)
+            result = create_backup(self.server, backup_kind=BACKUP_KIND_HOURLY)
 
         self.assertTrue(result["ok"], result)
-        self.assertEqual(result["filename"], "gtnh-production-20260803-023045.tar.gz")
+        self.assertEqual(result["filename"], "gtnh-production-20260803-023045-HOURLY.tar.gz")
+        self.assertEqual(Path(result["path"]).parent, self.backup_dir / "hourly")
+
+    def test_each_created_kind_uses_its_own_directory(self):
+        def _fake_archive(*args, **kwargs):
+            Path(args[2]).write_bytes(b"backup")
+
+        with mock.patch("apps.servers.backup_engine._archive_server_files", side_effect=_fake_archive):
+            for backup_kind, directory_name in (
+                (BACKUP_KIND_HOURLY, "hourly"),
+                (BACKUP_KIND_DAILY, "daily"),
+                (BACKUP_KIND_WEEKLY, "weekly"),
+                (BACKUP_KIND_MONTHLY, "monthly"),
+                (BACKUP_KIND_USER, "user"),
+            ):
+                result = create_backup(self.server, backup_kind=backup_kind)
+                self.assertTrue(result["ok"], result)
+                self.assertEqual(Path(result["path"]).parent, self.backup_dir / directory_name)
 
     def test_rotation_result_contains_forensic_keep_and_delete_lists(self):
         for stamp in (
@@ -347,7 +373,7 @@ class BackupExclusionTests(TestCase):
         self.assertEqual(rotation["rotated"], 0)
         self.assertEqual(rotation["kept_total"], 17)
 
-    def test_rotation_keeps_transition_backup_before_auto_capacity_is_full(self):
+    def test_rotation_does_not_delete_legacy_backups(self):
         stamps = [
             "20260810-215217",
             "20260811-221939",
@@ -372,8 +398,8 @@ class BackupExclusionTests(TestCase):
 
         self.assertEqual(rotation["rotated"], 0)
         self.assertEqual(rotation["kept_total"], len(stamps))
-        self.assertEqual(rotation["kept_reserve"], 1)
-        self.assertEqual(Counter(item["retention_bucket"] for item in kept), Counter({"intraday": 8, "daily": 4, "reserve": 1}))
+        self.assertEqual(rotation["kept_legacy"], len(stamps))
+        self.assertEqual(Counter(item["retention_bucket"] for item in kept), Counter({"legacy": len(stamps)}))
         self.assertIn(f"{self.server.slug}-20260813-110557.tar.gz", rotation["kept_files"])
 
 
@@ -398,10 +424,9 @@ class AutoBackupScheduleTests(TestCase):
         )
         self.now = timezone.make_aware(timezone.datetime(2026, 7, 24, 12, 0, 0), timezone.get_current_timezone())
 
-    def _create_archive(self, dt, *, is_user=False, name=None):
+    def _create_archive(self, dt, *, backup_kind=BACKUP_KIND_HOURLY, name=None):
         if name is None:
-            suffix = "-USER" if is_user else ""
-            name = f"{self.server.slug}-{dt.strftime('%Y%m%d-%H%M%S')}{suffix}.tar.gz"
+            name = f"{self.server.slug}-{dt.strftime('%Y%m%d-%H%M%S')}-{backup_kind}.tar.gz"
         archive = self.backup_dir / name
         archive.write_bytes(b"backup")
         return archive
@@ -413,13 +438,16 @@ class AutoBackupScheduleTests(TestCase):
         self.assertTrue(result["due"])
 
     def test_recent_auto_backup_is_not_due(self):
-        self._create_archive(self.now - timedelta(hours=2, minutes=59))
+        hourly_dir = self.backup_dir / "hourly"
+        hourly_dir.mkdir()
+        name = f"{self.server.slug}-{(self.now - timedelta(hours=2, minutes=59)).strftime('%Y%m%d-%H%M%S')}-{BACKUP_KIND_HOURLY}.tar.gz"
+        (hourly_dir / name).write_bytes(b"backup")
 
         result = check_auto_backup_due(self.server, now=self.now)
 
         self.assertTrue(result["ok"])
         self.assertFalse(result["due"])
-        self.assertEqual(result["newest_kind"], "AUTO")
+        self.assertEqual(result["backup_kind"], BACKUP_KIND_HOURLY)
 
     def test_auto_backup_exactly_three_hours_old_is_due(self):
         self._create_archive(self.now - timedelta(hours=AUTO_BACKUP_INTERVAL_HOURS))
@@ -435,39 +463,51 @@ class AutoBackupScheduleTests(TestCase):
 
         self.assertTrue(result["due"])
 
-    def test_recent_user_backup_is_not_due(self):
-        self._create_archive(self.now - timedelta(hours=2), is_user=True)
-
-        result = check_auto_backup_due(self.server, now=self.now)
-
-        self.assertFalse(result["due"])
-        self.assertEqual(result["newest_kind"], "USER")
-
-    def test_old_user_backup_is_due(self):
-        self._create_archive(self.now - timedelta(hours=4), is_user=True)
+    def test_user_backup_does_not_delay_hourly_backup(self):
+        self._create_archive(self.now - timedelta(hours=2), backup_kind=BACKUP_KIND_USER)
 
         result = check_auto_backup_due(self.server, now=self.now)
 
         self.assertTrue(result["due"])
-        self.assertEqual(result["newest_kind"], "USER")
 
-    def test_newer_user_backup_wins_over_older_auto_backup(self):
-        self._create_archive(self.now - timedelta(hours=5))
-        self._create_archive(self.now - timedelta(hours=2), is_user=True)
+    def test_daily_backup_is_due_once_after_two(self):
+        before_two = self.now.replace(hour=1, minute=59)
+        after_two = self.now.replace(hour=2, minute=0)
+
+        self.assertNotIn(BACKUP_KIND_DAILY, check_backup_layers_due(self.server, now=before_two)["due_kinds"])
+        self.assertIn(BACKUP_KIND_DAILY, check_backup_layers_due(self.server, now=after_two)["due_kinds"])
+
+        self._create_archive(after_two, backup_kind=BACKUP_KIND_DAILY)
+        self.assertNotIn(BACKUP_KIND_DAILY, check_backup_layers_due(self.server, now=self.now)["due_kinds"])
+
+    def test_weekly_backup_is_due_after_seven_days_at_three(self):
+        last_weekly = self.now - timedelta(days=7)
+        self._create_archive(last_weekly, backup_kind=BACKUP_KIND_WEEKLY)
+
+        before_three = self.now.replace(hour=2, minute=59)
+        after_three = self.now.replace(hour=3, minute=0)
+        self.assertNotIn(BACKUP_KIND_WEEKLY, check_backup_layers_due(self.server, now=before_three)["due_kinds"])
+        self.assertIn(BACKUP_KIND_WEEKLY, check_backup_layers_due(self.server, now=after_three)["due_kinds"])
+
+    def test_monthly_backup_is_due_only_last_day_after_four(self):
+        last_day = timezone.make_aware(datetime(2026, 7, 31, 4, 0, 0), timezone.get_current_timezone())
+        before_four = last_day.replace(hour=3, minute=59)
+        previous_day = last_day - timedelta(days=1)
+
+        self.assertNotIn(BACKUP_KIND_MONTHLY, check_backup_layers_due(self.server, now=previous_day)["due_kinds"])
+        self.assertNotIn(BACKUP_KIND_MONTHLY, check_backup_layers_due(self.server, now=before_four)["due_kinds"])
+        self.assertIn(BACKUP_KIND_MONTHLY, check_backup_layers_due(self.server, now=last_day)["due_kinds"])
+
+        self._create_archive(last_day, backup_kind=BACKUP_KIND_MONTHLY)
+        self.assertNotIn(BACKUP_KIND_MONTHLY, check_backup_layers_due(self.server, now=last_day.replace(hour=12))["due_kinds"])
+
+    def test_other_auto_layers_do_not_delay_hourly_backup(self):
+        self._create_archive(self.now - timedelta(minutes=10), backup_kind=BACKUP_KIND_DAILY)
+        self._create_archive(self.now - timedelta(minutes=5), backup_kind=BACKUP_KIND_WEEKLY)
 
         result = check_auto_backup_due(self.server, now=self.now)
 
-        self.assertFalse(result["due"])
-        self.assertEqual(result["newest_kind"], "USER")
-
-    def test_newer_auto_backup_wins_over_older_user_backup(self):
-        self._create_archive(self.now - timedelta(hours=5), is_user=True)
-        self._create_archive(self.now - timedelta(hours=2))
-
-        result = check_auto_backup_due(self.server, now=self.now)
-
-        self.assertFalse(result["due"])
-        self.assertEqual(result["newest_kind"], "AUTO")
+        self.assertTrue(result["due"])
 
     def test_unrelated_tar_gz_does_not_affect_due_decision(self):
         self._create_archive(self.now - timedelta(minutes=30), name="gtnh-production-manual-export.tar.gz")
@@ -495,7 +535,7 @@ class AutoBackupScheduleTests(TestCase):
             raise RuntimeError("boom")
 
         with mock.patch("apps.servers.backup_engine._archive_server_files", side_effect=_failing_archive):
-            result = create_backup(self.server, is_user=False)
+            result = create_backup(self.server, backup_kind=BACKUP_KIND_HOURLY)
 
         self.assertFalse(result["ok"])
         self.assertEqual(list(self.backup_dir.glob("*.tar.gz")), [])
@@ -549,7 +589,7 @@ class AutoBackupScheduleTests(TestCase):
         backups = list_backups(self.server)
         kept = [item for item in backups if item["protected_by_rotation"]]
 
-        self.assertEqual(Counter(item["retention_bucket"] for item in kept), Counter({"intraday": 8, "daily": 4, "user": 1, "reserve": 1}))
+        self.assertEqual(Counter(item["retention_bucket"] for item in kept), Counter({"legacy": 13, "user": 1}))
         self.assertEqual(len(kept), 14)
 
 
@@ -663,44 +703,6 @@ class ServerEditTests(TestCase):
         self.assertIn("backup_exclude_paths.help_text", content)
 
 
-RETENTION_REPRO_TIMESTAMPS = [
-    "20260724-100957", "20260724-143341", "20260724-173701", "20260724-204011", "20260724-234324",
-    "20260725-024649", "20260725-055011", "20260725-085330", "20260725-115645", "20260725-145959",
-    "20260725-180318", "20260725-210626", "20260726-000935", "20260726-031246", "20260726-061607",
-    "20260726-091927", "20260726-122244", "20260726-152556", "20260726-182916", "20260726-213226",
-    "20260727-003545", "20260727-033905", "20260727-064221", "20260727-094539", "20260727-124848",
-    "20260727-155200", "20260727-185509", "20260727-215816", "20260728-010152", "20260728-040518",
-    "20260728-070856", "20260728-101011", "20260728-131341", "20260728-161716", "20260728-192038",
-    "20260728-222406", "20260729-012728", "20260729-043052", "20260729-073415", "20260729-103745",
-    "20260729-134115", "20260729-164445", "20260729-194816", "20260729-225145", "20260730-015513",
-    "20260730-045837", "20260730-080159", "20260730-110525", "20260730-140852", "20260730-171213",
-    "20260730-201534", "20260730-231858", "20260731-022220", "20260731-052543", "20260731-082906",
-    "20260731-113410", "20260731-143735", "20260731-174102", "20260731-204425", "20260731-234750",
-    "20260801-025112", "20260801-055435", "20260801-085758", "20260801-120123", "20260801-150450",
-]
-
-EXPECTED_LAYERED_KEEP = [
-    ("gtnh-production-20260801-150450.tar.gz", "intraday"),
-    ("gtnh-production-20260801-120123.tar.gz", "intraday"),
-    ("gtnh-production-20260801-085758.tar.gz", "intraday"),
-    ("gtnh-production-20260801-055435.tar.gz", "intraday"),
-    ("gtnh-production-20260801-025112.tar.gz", "intraday"),
-    ("gtnh-production-20260731-234750.tar.gz", "intraday"),
-    ("gtnh-production-20260731-204425.tar.gz", "intraday"),
-    ("gtnh-production-20260731-174102.tar.gz", "intraday"),
-    ("gtnh-production-20260731-143735.tar.gz", "daily"),
-    ("gtnh-production-20260730-231858.tar.gz", "daily"),
-    ("gtnh-production-20260729-225145.tar.gz", "daily"),
-    ("gtnh-production-20260728-222406.tar.gz", "daily"),
-    ("gtnh-production-20260727-215816.tar.gz", "daily"),
-    ("gtnh-production-20260726-213226.tar.gz", "daily"),
-    ("gtnh-production-20260725-210626.tar.gz", "daily"),
-    ("gtnh-production-20260725-145959.tar.gz", "weekly"),
-]
-
-ROLLING_RETENTION_START = datetime(2026, 7, 1, 0, 0, 0, tzinfo=ZoneInfo("Europe/Prague"))
-
-
 class BackupRetentionTests(TestCase):
     def _make_server(self, directory: Path, *, backup_keep_count: int = 12) -> Server:
         return Server.objects.create(
@@ -719,75 +721,64 @@ class BackupRetentionTests(TestCase):
             status=ServerStatus.OFFLINE,
         )
 
-    def _create_backup_files(self, directory: Path, slug: str) -> None:
-        for stamp in RETENTION_REPRO_TIMESTAMPS:
-            (directory / f"{slug}-{stamp}.tar.gz").write_bytes(b"x")
+    def _create_files(self, directory: Path, slug: str, backup_kind: str, count: int) -> list[str]:
+        names = []
+        current = datetime(2026, 8, 16, 18, 0, 0)
+        for index in range(count):
+            stamp = (current - timedelta(hours=index)).strftime("%Y%m%d-%H%M%S")
+            name = f"{slug}-{stamp}-{backup_kind}.tar.gz"
+            (directory / name).write_bytes(b"x")
+            names.append(name)
+        return names
 
-    def test_rotate_backups_keeps_layered_retention_for_production_timestamp_series(self):
+    def test_each_layer_rotates_only_its_own_files(self):
         with TemporaryDirectory() as temp_dir:
             backup_dir = Path(temp_dir)
             server = self._make_server(backup_dir, backup_keep_count=12)
-            self._create_backup_files(backup_dir, server.slug)
+            hourly = self._create_files(backup_dir, server.slug, BACKUP_KIND_HOURLY, 10)
+            daily = self._create_files(backup_dir, server.slug, BACKUP_KIND_DAILY, 9)
+            weekly = self._create_files(backup_dir, server.slug, BACKUP_KIND_WEEKLY, 6)
+            monthly = self._create_files(backup_dir, server.slug, BACKUP_KIND_MONTHLY, 14)
 
             rotation = rotate_backups(server)
-            backups_after_rotation = list_backups(server)
-            kept = [item for item in backups_after_rotation if item["protected_by_rotation"]]
+            remaining = {item["name"] for item in list_backups(server)}
 
-            self.assertEqual(rotation["rotated"], len(RETENTION_REPRO_TIMESTAMPS) - len(kept))
-            self.assertEqual(rotation["kept_total"], len(kept))
-            self.assertEqual(rotation["kept_intraday"], 8)
+            self.assertEqual(rotation["rotated"], 8)
+            self.assertEqual(rotation["kept_hourly"], 8)
             self.assertEqual(rotation["kept_daily"], 7)
-            self.assertEqual(rotation["kept_weekly"], 1)
-            self.assertEqual(rotation["kept_monthly"], 1)
-            self.assertEqual(rotation["kept_reserve"], TOTAL_AUTO_KEEP - 17)
-            self.assertEqual(len(rotation["kept_files"]), len(kept))
-            self.assertEqual(len(rotation["deleted_files"]), len(RETENTION_REPRO_TIMESTAMPS) - len(kept))
-            self.assertEqual(len(backups_after_rotation), len(kept))
-            self.assertEqual(
-                Counter(item["retention_bucket"] for item in kept),
-                Counter({"intraday": 8, "daily": 7, "weekly": 1, "monthly": 1, "reserve": TOTAL_AUTO_KEEP - 17}),
-            )
-            self.assertIn(
-                f"{server.slug}-20260731-234750.tar.gz",
-                rotation["kept_files"],
-            )
+            self.assertEqual(rotation["kept_weekly"], 4)
+            self.assertEqual(rotation["kept_monthly"], 12)
+            self.assertEqual(remaining, set(hourly[:8] + daily[:7] + weekly[:4] + monthly[:12]))
 
-    def test_rolling_rotation_preserves_daily_and_weekly_candidates(self):
+    def test_layer_scoped_rotation_leaves_other_layer_excess_untouched(self):
         with TemporaryDirectory() as temp_dir:
             backup_dir = Path(temp_dir)
-            server = self._make_server(backup_dir, backup_keep_count=12)
-            current = ROLLING_RETENTION_START
+            server = self._make_server(backup_dir)
+            hourly = self._create_files(backup_dir, server.slug, BACKUP_KIND_HOURLY, 10)
+            daily = self._create_files(backup_dir, server.slug, BACKUP_KIND_DAILY, 9)
 
-            for _ in range((24 * 16) // 3):
-                archive = backup_dir / f"{server.slug}-{current.strftime('%Y%m%d-%H%M%S')}.tar.gz"
-                archive.write_bytes(b"x")
-                rotate_backups(server)
-                current += timedelta(hours=3)
+            rotation = rotate_backups(server, backup_kind=BACKUP_KIND_HOURLY)
+            remaining = {item["name"] for item in list_backups(server)}
 
-            backups_after_rotation = list_backups(server)
-            kept = [item for item in backups_after_rotation if item["protected_by_rotation"]]
+            self.assertEqual(rotation["deleted_files"], hourly[8:])
+            self.assertTrue(set(daily).issubset(remaining))
+            self.assertEqual(len([name for name in remaining if name.endswith("-DAILY.tar.gz")]), 9)
 
-            self.assertEqual(
-                Counter(item["retention_bucket"] for item in kept),
-                Counter({"intraday": 8, "daily": 7, "weekly": 1, "reserve": TOTAL_AUTO_KEEP - 16}),
-            )
-            self.assertEqual(len(kept), TOTAL_AUTO_KEEP)
-
-    def test_rolling_rotation_preserves_month_end_backup_for_monthly_layer(self):
+    def test_user_and_legacy_backups_are_never_deleted(self):
         with TemporaryDirectory() as temp_dir:
             backup_dir = Path(temp_dir)
-            server = self._make_server(backup_dir, backup_keep_count=12)
-            current = datetime(2026, 7, 20, 0, 0, 0, tzinfo=ZoneInfo("Europe/Prague"))
+            server = self._make_server(backup_dir)
+            user_names = self._create_files(backup_dir, server.slug, BACKUP_KIND_USER, 15)
+            legacy_names = []
+            for index in range(15):
+                name = f"{server.slug}-202607{index + 1:02d}-120000.tar.gz"
+                (backup_dir / name).write_bytes(b"x")
+                legacy_names.append(name)
 
-            for _ in range((24 * 45) // 3):
-                archive = backup_dir / f"{server.slug}-{current.strftime('%Y%m%d-%H%M%S')}.tar.gz"
-                archive.write_bytes(b"x")
-                rotate_backups(server)
-                current += timedelta(hours=3)
+            rotation = rotate_backups(server)
+            remaining = {item["name"] for item in list_backups(server)}
 
-            backups_after_rotation = list_backups(server)
-            kept = [item for item in backups_after_rotation if item["protected_by_rotation"]]
-            monthly = [item for item in kept if item["retention_bucket"] == "monthly"]
-
-            self.assertGreaterEqual(len(monthly), 1)
-            self.assertTrue(any(item["name"].startswith(f"{server.slug}-20260731-") for item in kept))
+            self.assertEqual(rotation["rotated"], 0)
+            self.assertEqual(rotation["kept_user"], 15)
+            self.assertEqual(rotation["kept_legacy"], 15)
+            self.assertEqual(remaining, set(user_names + legacy_names))

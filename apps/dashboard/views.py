@@ -473,7 +473,7 @@ def _build_backup_summary(backups: list[dict]) -> dict:
         "auto_count": sum(1 for item in backups if not item.get("is_user")),
         "user_count": sum(1 for item in backups if item.get("is_user")),
         "total_size_bytes": sum(item.get("size_bytes", 0) for item in backups),
-        "kept_intraday": sum(1 for item in backups if item.get("retention_bucket") == "intraday"),
+        "kept_hourly": sum(1 for item in backups if item.get("retention_bucket") == "hourly"),
         "kept_daily": sum(1 for item in backups if item.get("retention_bucket") == "daily"),
         "kept_weekly": sum(1 for item in backups if item.get("retention_bucket") == "weekly"),
         "kept_monthly": sum(1 for item in backups if item.get("retention_bucket") == "monthly"),
@@ -491,10 +491,10 @@ def backup_overview(request, slug):
             raise PermissionDenied
 
         import threading
-        from apps.servers.backup_engine import create_backup
+        from apps.servers.backup_engine import BACKUP_KIND_USER, create_backup
 
         def _run():
-            create_backup(server, is_user=True)
+            create_backup(server, backup_kind=BACKUP_KIND_USER)
 
         threading.Thread(target=_run, daemon=True).start()
         messages.success(request, "USER záloha spuštěna na pozadí. Automatická rotace ji nebude mazat.")
@@ -534,11 +534,12 @@ def backup_create_api(request, slug):
         raise PermissionDenied
 
     import threading
-    from apps.servers.backup_engine import create_backup
+    from apps.servers.backup_engine import BACKUP_KIND_HOURLY, BACKUP_KIND_USER, create_backup
     is_user = request.POST.get("kind") == "user"
+    backup_kind = BACKUP_KIND_USER if is_user else BACKUP_KIND_HOURLY
 
     def _run():
-        create_backup(server, is_user=is_user)
+        create_backup(server, backup_kind=backup_kind)
 
     t = threading.Thread(target=_run, daemon=True)
     t.start()

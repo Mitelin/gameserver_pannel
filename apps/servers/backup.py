@@ -13,6 +13,7 @@ Checker se volá z watchdogu nebo jako samostatný management command.
 """
 import logging
 import re
+import calendar
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -22,7 +23,22 @@ logger = logging.getLogger(__name__)
 
 AUTO_BACKUP_INTERVAL_HOURS = 3
 AUTO_BACKUP_INTERVAL = timedelta(hours=AUTO_BACKUP_INTERVAL_HOURS)
-_PANEL_BACKUP_FILENAME_RE = re.compile(r"^(?P<slug>.+)-(?P<timestamp>\d{8}-\d{6})(?P<user>-USER)?\.tar\.gz$", re.IGNORECASE)
+BACKUP_KIND_HOURLY = "HOURLY"
+BACKUP_KIND_DAILY = "DAILY"
+BACKUP_KIND_WEEKLY = "WEEKLY"
+BACKUP_KIND_MONTHLY = "MONTHLY"
+BACKUP_KIND_USER = "USER"
+BACKUP_KIND_LEGACY = "LEGACY"
+AUTO_BACKUP_KINDS = (
+    BACKUP_KIND_HOURLY,
+    BACKUP_KIND_DAILY,
+    BACKUP_KIND_WEEKLY,
+    BACKUP_KIND_MONTHLY,
+)
+_PANEL_BACKUP_FILENAME_RE = re.compile(
+    r"^(?P<slug>.+)-(?P<timestamp>\d{8}-\d{6})(?:-(?P<kind>HOURLY|DAILY|WEEKLY|MONTHLY|USER))?\.tar\.gz$",
+    re.IGNORECASE,
+)
 
 
 def _parse_panel_backup_entry(server_slug: str, file_path: Path):
@@ -43,7 +59,8 @@ def _parse_panel_backup_entry(server_slug: str, file_path: Path):
     except OSError:
         return None
 
-    is_user = bool(match.group("user"))
+    backup_kind = (match.group("kind") or BACKUP_KIND_LEGACY).upper()
+    is_user = backup_kind == BACKUP_KIND_USER
     return {
         "name": file_path.name,
         "path": str(file_path),
@@ -52,12 +69,13 @@ def _parse_panel_backup_entry(server_slug: str, file_path: Path):
         "created_at": created_at.isoformat(),
         "is_user": is_user,
         "kind": "USER" if is_user else "AUTO",
+        "backup_kind": backup_kind,
     }
 
 
 def _list_panel_backups(path: Path, server_slug: str) -> list[dict]:
     backups = []
-    for file_path in path.iterdir():
+    for file_path in path.rglob(f"{server_slug}-*.tar.gz"):
         if not file_path.is_file():
             continue
         entry = _parse_panel_backup_entry(server_slug, file_path)
@@ -67,61 +85,84 @@ def _list_panel_backups(path: Path, server_slug: str) -> list[dict]:
     return backups
 
 
-def check_auto_backup_due(server, *, now=None) -> dict:
+def _layer_due_result(backup_kind: str, due: bool, message: str, newest: dict | None = None) -> dict:
+    result = {
+        "backup_kind": backup_kind,
+        "due": due,
+        "message": message,
+    }
+    if newest is not None:
+        result["newest_file"] = newest["name"]
+        result["last_backup"] = newest["created_at"]
+    return result
+
+
+def check_backup_layers_due(server, *, now=None) -> dict:
     now = now or timezone.now()
+    local_now = timezone.localtime(now)
     backup_dir = getattr(server, "backup_directory", "")
 
     if not backup_dir:
-        return {"ok": None, "due": False, "message": "Backup adresář není nastaven."}
+        return {"ok": None, "due_kinds": [], "layers": [], "message": "Backup adresář není nastaven."}
 
     path = Path(backup_dir)
-    if not path.exists():
-        return {
-            "ok": True,
-            "due": True,
-            "interval_hours": AUTO_BACKUP_INTERVAL_HOURS,
-            "message": "Backup adresář zatím neexistuje; vytvářím první AUTO zálohu.",
-        }
-
     try:
-        files = _list_panel_backups(path, server.slug)
+        files = _list_panel_backups(path, server.slug) if path.exists() else []
     except PermissionError as exc:
-        return {"ok": False, "due": False, "message": f"Přístup odepřen: {exc}"}
+        return {"ok": False, "due_kinds": [], "layers": [], "message": f"Přístup odepřen: {exc}"}
 
-    if not files:
-        return {
-            "ok": True,
-            "due": True,
-            "interval_hours": AUTO_BACKUP_INTERVAL_HOURS,
-            "message": "Nenalezena žádná panelová záloha; vytvářím první AUTO zálohu.",
-        }
+    newest_by_kind = {}
+    for item in files:
+        backup_kind = item["backup_kind"]
+        if backup_kind in AUTO_BACKUP_KINDS and backup_kind not in newest_by_kind:
+            newest_by_kind[backup_kind] = item
 
-    newest = files[0]
-    age = now - newest["created_at_dt"]
-    age_hours = age.total_seconds() / 3600
-    due = age >= AUTO_BACKUP_INTERVAL
+    hourly = newest_by_kind.get(BACKUP_KIND_HOURLY)
+    hourly_due = hourly is None or now - hourly["created_at_dt"] >= AUTO_BACKUP_INTERVAL
+    hourly_message = (
+        "Nenalezena žádná HOURLY záloha."
+        if hourly is None
+        else f"Poslední HOURLY záloha je stará {(now - hourly['created_at_dt']).total_seconds() / 3600:.1f}h."
+    )
 
-    if due:
-        message = (
-            f"Poslední panelová záloha {newest['name']} ({newest['kind']}) je stará {age_hours:.1f}h; "
-            f"překročen {AUTO_BACKUP_INTERVAL_HOURS}h interval, AUTO záloha je splatná."
-        )
-    else:
-        message = (
-            f"Poslední panelová záloha {newest['name']} ({newest['kind']}) je stará {age_hours:.1f}h; "
-            f"AUTO záloha zatím není splatná před {AUTO_BACKUP_INTERVAL_HOURS}h intervalem."
-        )
+    daily = newest_by_kind.get(BACKUP_KIND_DAILY)
+    daily_due = local_now.hour >= 2 and (daily is None or timezone.localtime(daily["created_at_dt"]).date() < local_now.date())
+    daily_message = "DAILY záloha se vytváří jednou denně po 02:00."
 
+    weekly = newest_by_kind.get(BACKUP_KIND_WEEKLY)
+    weekly_due = local_now.hour >= 3 and (weekly is None or local_now.date() - timezone.localtime(weekly["created_at_dt"]).date() >= timedelta(days=7))
+    weekly_message = "WEEKLY záloha se vytváří po 03:00 nejdříve 7 dní od předchozí."
+
+    monthly = newest_by_kind.get(BACKUP_KIND_MONTHLY)
+    is_last_day = local_now.day == calendar.monthrange(local_now.year, local_now.month)[1]
+    monthly_exists = monthly is not None and (
+        timezone.localtime(monthly["created_at_dt"]).year,
+        timezone.localtime(monthly["created_at_dt"]).month,
+    ) == (local_now.year, local_now.month)
+    monthly_due = is_last_day and local_now.hour >= 4 and not monthly_exists
+    monthly_message = "MONTHLY záloha se vytváří poslední den měsíce po 04:00."
+
+    layers = [
+        _layer_due_result(BACKUP_KIND_HOURLY, hourly_due, hourly_message, hourly),
+        _layer_due_result(BACKUP_KIND_DAILY, daily_due, daily_message, daily),
+        _layer_due_result(BACKUP_KIND_WEEKLY, weekly_due, weekly_message, weekly),
+        _layer_due_result(BACKUP_KIND_MONTHLY, monthly_due, monthly_message, monthly),
+    ]
+    due_kinds = [layer["backup_kind"] for layer in layers if layer["due"]]
     return {
         "ok": True,
-        "due": due,
-        "last_backup": newest["created_at"],
-        "age_hours": round(age_hours, 1),
-        "interval_hours": AUTO_BACKUP_INTERVAL_HOURS,
-        "newest_file": newest["name"],
-        "newest_kind": newest["kind"],
-        "message": message,
+        "due_kinds": due_kinds,
+        "layers": layers,
+        "message": f"Splatné vrstvy: {', '.join(due_kinds) if due_kinds else 'žádné'}.",
     }
+
+
+def check_auto_backup_due(server, *, now=None) -> dict:
+    result = check_backup_layers_due(server, now=now)
+    hourly = next((layer for layer in result.get("layers", []) if layer["backup_kind"] == BACKUP_KIND_HOURLY), None)
+    if hourly is None:
+        return {"ok": result["ok"], "due": False, "message": result["message"]}
+    return {"ok": result["ok"], "interval_hours": AUTO_BACKUP_INTERVAL_HOURS, **hourly}
 
 
 def check_backup_status(server, *, now=None) -> dict:
