@@ -480,6 +480,11 @@ class AutoBackupScheduleTests(TestCase):
         self._create_archive(after_two, backup_kind=BACKUP_KIND_DAILY)
         self.assertNotIn(BACKUP_KIND_DAILY, check_backup_layers_due(self.server, now=self.now)["due_kinds"])
 
+    def test_daily_backup_is_not_created_late_in_the_evening_when_missed(self):
+        evening = self.now.replace(hour=20, minute=36)
+
+        self.assertNotIn(BACKUP_KIND_DAILY, check_backup_layers_due(self.server, now=evening)["due_kinds"])
+
     def test_weekly_backup_is_due_after_seven_days_at_three(self):
         last_weekly = self.now - timedelta(days=7)
         self._create_archive(last_weekly, backup_kind=BACKUP_KIND_WEEKLY)
@@ -488,6 +493,11 @@ class AutoBackupScheduleTests(TestCase):
         after_three = self.now.replace(hour=3, minute=0)
         self.assertNotIn(BACKUP_KIND_WEEKLY, check_backup_layers_due(self.server, now=before_three)["due_kinds"])
         self.assertIn(BACKUP_KIND_WEEKLY, check_backup_layers_due(self.server, now=after_three)["due_kinds"])
+
+    def test_weekly_backup_is_not_created_late_when_missed(self):
+        evening = self.now.replace(hour=20, minute=36)
+
+        self.assertNotIn(BACKUP_KIND_WEEKLY, check_backup_layers_due(self.server, now=evening)["due_kinds"])
 
     def test_monthly_backup_is_due_only_last_day_after_four(self):
         last_day = timezone.make_aware(datetime(2026, 7, 31, 4, 0, 0), timezone.get_current_timezone())
@@ -500,6 +510,11 @@ class AutoBackupScheduleTests(TestCase):
 
         self._create_archive(last_day, backup_kind=BACKUP_KIND_MONTHLY)
         self.assertNotIn(BACKUP_KIND_MONTHLY, check_backup_layers_due(self.server, now=last_day.replace(hour=12))["due_kinds"])
+
+    def test_monthly_backup_is_not_created_late_when_missed(self):
+        evening_last_day = timezone.make_aware(datetime(2026, 7, 31, 20, 36, 0), timezone.get_current_timezone())
+
+        self.assertNotIn(BACKUP_KIND_MONTHLY, check_backup_layers_due(self.server, now=evening_last_day)["due_kinds"])
 
     def test_other_auto_layers_do_not_delay_hourly_backup(self):
         self._create_archive(self.now - timedelta(minutes=10), backup_kind=BACKUP_KIND_DAILY)

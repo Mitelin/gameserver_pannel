@@ -97,6 +97,10 @@ def _layer_due_result(backup_kind: str, due: bool, message: str, newest: dict | 
     return result
 
 
+def _is_scheduled_hour(local_now, scheduled_hour: int) -> bool:
+    return local_now.hour == scheduled_hour
+
+
 def check_backup_layers_due(server, *, now=None) -> dict:
     now = now or timezone.now()
     local_now = timezone.localtime(now)
@@ -126,12 +130,12 @@ def check_backup_layers_due(server, *, now=None) -> dict:
     )
 
     daily = newest_by_kind.get(BACKUP_KIND_DAILY)
-    daily_due = local_now.hour >= 2 and (daily is None or timezone.localtime(daily["created_at_dt"]).date() < local_now.date())
-    daily_message = "DAILY záloha se vytváří jednou denně po 02:00."
+    daily_due = _is_scheduled_hour(local_now, 2) and (daily is None or timezone.localtime(daily["created_at_dt"]).date() < local_now.date())
+    daily_message = "DAILY záloha se vytváří jednou denně v 02:00 hodině."
 
     weekly = newest_by_kind.get(BACKUP_KIND_WEEKLY)
-    weekly_due = local_now.hour >= 3 and (weekly is None or local_now.date() - timezone.localtime(weekly["created_at_dt"]).date() >= timedelta(days=7))
-    weekly_message = "WEEKLY záloha se vytváří po 03:00 nejdříve 7 dní od předchozí."
+    weekly_due = _is_scheduled_hour(local_now, 3) and (weekly is None or local_now.date() - timezone.localtime(weekly["created_at_dt"]).date() >= timedelta(days=7))
+    weekly_message = "WEEKLY záloha se vytváří v 03:00 hodině nejdříve 7 dní od předchozí."
 
     monthly = newest_by_kind.get(BACKUP_KIND_MONTHLY)
     is_last_day = local_now.day == calendar.monthrange(local_now.year, local_now.month)[1]
@@ -139,8 +143,8 @@ def check_backup_layers_due(server, *, now=None) -> dict:
         timezone.localtime(monthly["created_at_dt"]).year,
         timezone.localtime(monthly["created_at_dt"]).month,
     ) == (local_now.year, local_now.month)
-    monthly_due = is_last_day and local_now.hour >= 4 and not monthly_exists
-    monthly_message = "MONTHLY záloha se vytváří poslední den měsíce po 04:00."
+    monthly_due = is_last_day and _is_scheduled_hour(local_now, 4) and not monthly_exists
+    monthly_message = "MONTHLY záloha se vytváří poslední den měsíce v 04:00 hodině."
 
     layers = [
         _layer_due_result(BACKUP_KIND_HOURLY, hourly_due, hourly_message, hourly),
